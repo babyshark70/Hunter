@@ -3,412 +3,340 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 import streamlit.components.v1 as components
+import requests
+import time
+from datetime import datetime
 
-# --- سیستم ورود با رمز عبور ---
+# Must be the first Streamlit command.
+st.set_page_config(layout="wide", page_title="Alpha Market Scanner & Multi-TF Monitor")
+
+try:
+    APP_PASSWORD = st.secrets.get("APP_PASSWORD", "Arash1234")
+except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+    APP_PASSWORD = "Arash1234"
+
+
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "Ele12!@":
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]
-        else:
-            st.session_state["password_correct"] = False
+        st.session_state["password_correct"] = (
+            st.session_state.get("password", "") == APP_PASSWORD
+        )
+        st.session_state.pop("password", None)
 
-    if "password_correct" not in st.session_state:
-        st.text_input("لطفاً رمز عبور را وارد کنید:", type="password", on_change=password_entered, key="password")
-        return False
-    elif not st.session_state["password_correct"]:
-        st.text_input("لطفاً رمز عبور را وارد کنید:", type="password", on_change=password_entered, key="password")
-        st.error("😕 رمز عبور اشتباه است")
-        return False
-    else:
+    if st.session_state.get("password_correct") is True:
         return True
+    st.text_input("لطفاً رمز عبور را وارد کنید:", type="password",
+                  on_change=password_entered, key="password")
+    if st.session_state.get("password_correct") is False:
+        st.error("😕 رمز عبور اشتباه است")
+    return False
 
 if not check_password():
     st.stop()
 
-# --- تنظیمات صفحه استریم‌لیت ---
-st.set_page_config(layout="wide", page_title="Alpha Market Scanner & Multi-TF Monitor")
-
 st.markdown("""
 <style>
-    .stApp, [data-testid="stHeader"], [data-testid="stSidebar"] {
-        background-color: #131722 !important;
-        color: #d1d4dc !important;
-    }
-    .block-container {
-        padding-top: 0.2rem !important;
-        padding-bottom: 0rem !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
-    h1 {
-        font-size: 32px !important;
-        font-weight: bold !important;
-        color: #f8fafc !important;
-        margin-bottom: 0px !important;
-    }
-    h2, h3 {
-        font-size: 22px !important;
-        font-weight: bold !important;
-        color: #e2e8f0 !important;
-        margin-top: 5px !important;
-        margin-bottom: 5px !important;
-    }
-    div[data-testid="stTextInput"] > label, div[data-testid="stWidgetLabel"] p {
-        font-size: 16px !important;
-        font-weight: bold !important;
-        color: #f8fafc !important;
-    }
-    hr {
-        margin-top: 5px !important;
-        margin-bottom: 5px !important;
-        border-color: #2a2e39 !important;
-    }
+.stApp,[data-testid="stHeader"],[data-testid="stSidebar"]{background:#131722!important;color:#d1d4dc!important}
+.block-container{padding:.2rem .5rem 0!important}
+h1{font-size:32px!important;font-weight:bold!important;color:#f8fafc!important;margin-bottom:0!important}
+h2,h3{font-size:22px!important;font-weight:bold!important;color:#e2e8f0!important;margin:5px 0!important}
+div[data-testid="stTextInput"]>label,div[data-testid="stWidgetLabel"] p{font-size:16px!important;font-weight:bold!important;color:#f8fafc!important}
+hr{margin:5px 0!important;border-color:#2a2e39!important}
 </style>
 """, unsafe_allow_html=True)
-
 st.title("🎯 Alpha Market Scanner & Multi-TF Q-Line Monitor")
 
-# تابع محاسباتی استاندارد و دقیق سری‌های زمانی پانداس مطابق با چارت
-def calc_q_status(df):
+TICKERS = ["NVDA","AMD","MU","INTC","TSLA","AAPL","MSFT","AMZN","GOOGL","META",
+           "QCOM","AVGO","PYPL","BA","DIS","LRCX","AMAT","NFLX","CRM","PLTR"]
+OHLCV = ["Open","High","Low","Close","Volume"]
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+def normalize_history(frame):
+    """Normalize yfinance MultiIndex and ordinary OHLCV data."""
+    if frame is None or frame.empty:
+        return pd.DataFrame()
+    frame = frame.copy()
+    if isinstance(frame.columns, pd.MultiIndex):
+        flat = []
+        for column in frame.columns:
+            parts = [str(x) for x in column]
+            found = next((x for x in parts if x in OHLCV + ["Adj Close"]), None)
+            flat.append(found or parts[0])
+        frame.columns = flat
+    frame.columns = [str(x) for x in frame.columns]
+    frame = frame.loc[:, ~frame.columns.duplicated()]
+    if not all(c in frame.columns for c in OHLCV):
+        return pd.DataFrame()
+    frame = frame[OHLCV]
+    for c in OHLCV:
+        frame[c] = pd.to_numeric(frame[c], errors="coerce")
+    frame = frame.dropna(subset=["Open","High","Low","Close"])
+    return frame.loc[~frame.index.duplicated(keep="last")].sort_index()
+
+def fetch_direct_yahoo(ticker):
+    errors = []
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        url = f"https://{host}/v8/finance/chart/{ticker}"
+        try:
+            response = requests.get(
+                url, params={"range":"1y","interval":"1d","events":"div,splits"},
+                headers=HEADERS, timeout=(5, 12)
+            )
+            if response.status_code != 200:
+                errors.append(f"{host}: HTTP {response.status_code}: {response.text[:100]!r}")
+                continue
+            payload = response.json()
+            chart = payload.get("chart", {})
+            if chart.get("error"):
+                errors.append(f"{host}: Yahoo error {chart['error']}")
+                continue
+            result = (chart.get("result") or [None])[0]
+            if not result:
+                errors.append(f"{host}: empty result")
+                continue
+            timestamps = result.get("timestamp") or []
+            quotes = result.get("indicators", {}).get("quote") or []
+            if not timestamps or not quotes:
+                errors.append(f"{host}: no OHLCV data")
+                continue
+            quote = quotes[0]
+            dates = pd.to_datetime(timestamps, unit="s", utc=True).tz_convert(None)
+            raw = pd.DataFrame({c: quote.get(c.lower()) for c in OHLCV}, index=dates)
+            raw.index.name = "Date"
+            clean = normalize_history(raw)
+            if not clean.empty:
+                return clean, f"Yahoo chart API ({host})", None
+            errors.append(f"{host}: OHLCV data unusable")
+        except requests.exceptions.SSLError as exc:
+            errors.append(f"{host}: SSL error: {exc}")
+        except requests.exceptions.Timeout:
+            errors.append(f"{host}: timeout")
+        except requests.exceptions.RequestException as exc:
+            errors.append(f"{host}: network error {type(exc).__name__}: {exc}")
+        except (ValueError, TypeError, KeyError) as exc:
+            errors.append(f"{host}: invalid response {type(exc).__name__}: {exc}")
+        time.sleep(0.25)
+    return pd.DataFrame(), None, " | ".join(errors)
+
+def fetch_history(ticker):
+    direct, source, direct_error = fetch_direct_yahoo(ticker)
+    if not direct.empty:
+        return direct, source, None
     try:
-        if df is None or len(df) < 60:
-            return "N/A"
-        high = df['High'].squeeze()
-        low = df['Low'].squeeze()
-        
+        data = yf.download(ticker, period="1y", interval="1d", progress=False,
+                           threads=False, auto_adjust=False, timeout=15)
+        data = normalize_history(data)
+        if not data.empty:
+            return data, "yfinance fallback", None
+        yf_error = "yfinance returned empty data"
+    except Exception as exc:
+        yf_error = f"{type(exc).__name__}: {exc}"
+    return pd.DataFrame(), None, f"Direct API: {direct_error} | yfinance: {yf_error}"
+
+def calc_q_status(frame):
+    # This is a daily-bar Ichimoku-style status, not an intraday status.
+    if frame is None or len(frame) < 52:
+        return "N/A"
+    try:
+        high, low = frame["High"], frame["Low"]
         tenkan = (high.rolling(9).max() + low.rolling(9).min()) / 2
-        kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2  # Quality Line
-        
-        # محاسبه ابر ایچیموکو با شیفت استاندارد ۲۶ دوره‌ای به جلو در سری‌های زمانی
-        span_a = ((tenkan + kijun) / 2).shift(26)
-        span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
-        
-        curr_q = float(kijun.iloc[-1])
-        c_top = max(float(span_a.iloc[-1]), float(span_b.iloc[-1]))
-        c_bot = min(float(span_a.iloc[-1]), float(span_b.iloc[-1]))
-        
-        if curr_q > c_top:
-            return "Above"
-        elif curr_q < c_bot:
-            return "Below"
-        else:
-            return "Inside"
-    except:
+        kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2
+        span_a = (tenkan + kijun) / 2
+        span_b = (high.rolling(52).max() + low.rolling(52).min()) / 2
+        q, a, b = float(kijun.iloc[-1]), float(span_a.iloc[-1]), float(span_b.iloc[-1])
+        if not all(np.isfinite(v) for v in (q,a,b)):
+            return "N/A"
+        return "Above" if q > max(a,b) else "Below" if q < min(a,b) else "Inside"
+    except Exception:
         return "N/A"
 
-def run_market_scan():
-    results = []
-    TICKERS = ["NVDA", "AMD", "INTC", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "QCOM", "AVGO", "PYPL", "BA", "DIS", "MU", "LRCX", "AMAT", "NFLX", "CRM", "PLTR"]
-    
+@st.cache_data(ttl=900, show_spinner=False)
+def run_fast_market_scan():
+    rows, diagnostic_rows = [], []
     for ticker in TICKERS:
-        try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-            mcap = info.get('marketCap', 0)
-            if mcap < 10_000_000_000:
-                continue
-            
-            df_d = stock.history(period="1yr", progress=False)
-            if df_d is not None and not df_d.empty and len(df_d) >= 200:
-                if isinstance(df_d.columns, pd.MultiIndex):
-                    df_d.columns = df_d.columns.get_level_values(0)
-                
-                close = df_d['Close'].squeeze()
-                high = df_d['High'].squeeze()
-                low = df_d['Low'].squeeze()
-                volume = df_d['Volume'].squeeze()
-                
-                curr_p = float(close.iloc[-1])
-                prev_p = float(close.iloc[-2])
-                price_change = round(((curr_p - prev_p) / prev_p) * 100, 2)
-                
-                high_52w = float(high.max())
-                drop_52w = round(((high_52w - curr_p) / high_52w) * 100, 2)
-                
-                if drop_52w > 45.0 or drop_52w < 3.0:
-                    continue
-                
-                month_high = float(high.iloc[-20:].max())
-                drop_1m = round(((month_high - curr_p) / month_high) * 100, 2)
-                
-                curr_vol = float(volume.iloc[-1])
-                avg_vol = float(volume.iloc[-20:].mean())
-                vol_ratio = round(curr_vol / avg_vol, 2) if avg_vol > 0 else 1.0
-                
-                delta = close.diff()
-                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-                rs = gain / loss
-                rsi = round(float(100 - (100 / (1 + rs))).iloc[-1], 2)
-                
-                sma_50 = float(close.rolling(50).mean().iloc[-1])
-                sma_50_diff = round(((curr_p - sma_50) / sma_50) * 100, 2)
-                
-                sma_200 = float(close.rolling(200).mean().iloc[-1])
-                sma_200_diff = round(((curr_p - sma_200) / sma_200) * 100, 2)
-                
-                recent_low_60 = float(low.iloc[-60:].min())
-                is_near_support = curr_p <= (recent_low_60 * 1.10)
-                
-                tr1 = high - low
-                tr2 = (high - close.shift()).abs()
-                tr3 = (low - close.shift()).abs()
-                tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-                atr_14 = float(tr.rolling(14).mean().iloc[-1])
-                suggested_stop_loss = round(curr_p - (1.5 * atr_14), 2)
-                
-                pe_ratio = round(info.get('trailingPE', 0), 2)
-                pe_str = f"{pe_ratio:.2f}" if pe_ratio > 0 else "-"
-                
-                q_d = calc_q_status(df_d)
-                
-                df_1h = stock.history(period="60d", interval="1h", progress=False)
-                q_1h = "N/A"
-                q_4h = "N/A"
-                
-                if df_1h is not None and not df_1h.empty:
-                    if isinstance(df_1h.columns, pd.MultiIndex):
-                        df_1h.columns = df_1h.columns.get_level_values(0)
-                    q_1h = calc_q_status(df_1h)
-                    
-                    df_4h = df_1h.resample('4H').agg({
-                        'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
-                    }).dropna()
-                    q_4h = calc_q_status(df_4h)
-                
-                support_bonus = 15.0 if is_near_support else 0.0
-                alpha_score = round(drop_1m + (50 - rsi) + (vol_ratio * 3) + support_bonus, 2)
-                    
-                results.append({
-                    "Ticker": ticker,
-                    "Company": info.get('shortName', ticker),
-                    "Sector": info.get('sector', 'Technology'),
-                    "MarketCap": mcap,
-                    "PE": pe_str,
-                    "Price": round(curr_p, 2),
-                    "Change": price_change,
-                    "Drop52W": drop_52w,
-                    "RSI": rsi,
-                    "NearSupport": "Valid" if is_near_support else "Normal",
-                    "Q_Daily": q_d,
-                    "Q_4H": q_4h,
-                    "Q_1H": q_1h,
-                    "VolRatio": vol_ratio,
-                    "SMA50_Diff": sma_50_diff,
-                    "SMA200_Diff": sma200_diff,
-                    "StopLoss": suggested_stop_loss,
-                    "Volume": int(curr_vol),
-                    "Score": alpha_score
-                })
-        except Exception:
+        frame, source, error = fetch_history(ticker)
+        if frame.empty or len(frame) < 50:
+            diagnostic_rows.append({"Ticker":ticker,"Status":"FAILED","Source":source or "—",
+                                    "Details":error or f"Only {len(frame)} rows"})
             continue
+        try:
+            close = frame["Close"].astype(float)
+            high = frame["High"].astype(float)
+            low = frame["Low"].astype(float)
+            volume = frame["Volume"].fillna(0).astype(float)
+            price, previous = float(close.iloc[-1]), float(close.iloc[-2])
+            if not np.isfinite(price) or price <= 0:
+                raise ValueError("Invalid latest close")
+            change = (price-previous)/previous*100 if previous > 0 else 0.0
+            max52 = float(high.max())
+            drop52 = (max52-price)/max52*100 if max52 > 0 else 0.0
+            max20 = float(high.iloc[-20:].max())
+            drop20 = (max20-price)/max20*100 if max20 > 0 else 0.0
+            prior_vol = volume.iloc[-21:-1] if len(volume) >= 21 else volume.iloc[:-1]
+            avg_vol = float(prior_vol.mean()) if len(prior_vol) else 0.0
+            vol_ratio = float(volume.iloc[-1])/avg_vol if avg_vol > 0 else 0.0
+            delta = close.diff()
+            gains = delta.clip(lower=0).rolling(14).mean()
+            losses = (-delta.clip(upper=0)).rolling(14).mean()
+            rs = gains / losses.replace(0, np.nan)
+            rsi_line = 100 - (100/(1+rs))
+            rsi = float(rsi_line.iloc[-1]) if pd.notna(rsi_line.iloc[-1]) else 50.0
+            sma50 = float(close.rolling(50).mean().iloc[-1])
+            sma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else sma50
+            sma50_diff = (price-sma50)/sma50*100 if sma50 > 0 else 0.0
+            sma200_diff = (price-sma200)/sma200*100 if sma200 > 0 else 0.0
+            support = float(low.iloc[-60:].min()) if len(low) >= 60 else float(low.min())
+            tr = pd.concat([high-low,(high-close.shift()).abs(),(low-close.shift()).abs()],axis=1).max(axis=1)
+            atr = float(tr.rolling(14).mean().iloc[-1])
+            if not np.isfinite(atr) or atr <= 0:
+                atr = price*0.02
+            rows.append({
+                "Ticker":ticker,"Company":ticker,"Sector":"N/A",
+                # The chart endpoint does not supply market cap; do not fabricate it.
+                "MarketCap":np.nan,"Price":round(price,2),"Change":round(change,2),
+                "Drop52W":round(drop52,2),"RSI":round(rsi,2),
+                "NearSupport":"Valid" if price <= support*1.10 else "Normal",
+                "Q_Daily":calc_q_status(frame),
+                # Do not claim 4H/1H values from daily candles.
+                "Q_4H":"N/A","Q_1H":"N/A",
+                "VolRatio":round(vol_ratio,2),"SMA50_Diff":round(sma50_diff,2),
+                "SMA200_Diff":round(sma200_diff,2),"StopLoss":round(price-1.5*atr,2),
+                "Volume":int(volume.iloc[-1]) if np.isfinite(volume.iloc[-1]) else 0,
+                "Score":round(drop20+(50-rsi)+(vol_ratio*3),2)
+            })
+            diagnostic_rows.append({"Ticker":ticker,"Status":"OK","Source":source or "unknown",
+                                     "Details":f"{len(frame)} daily rows"})
+        except Exception as exc:
+            diagnostic_rows.append({"Ticker":ticker,"Status":"FAILED","Source":source or "—",
+                                    "Details":f"Calculation error: {type(exc).__name__}: {exc}"})
+    return rows, diagnostic_rows
 
-    if len(results) < 6:
-        fallback_stocks = [
-            {"Ticker": "MU", "Company": "Micron Technology", "Sector": "Technology", "MarketCap": 1120000000000, "PE": "18.50", "Price": 102.30, "Change": -2.10, "Drop52W": 22.1, "RSI": 33.5, "NearSupport": "Valid", "Q_Daily": "Above", "Q_4H": "Above", "Q_1H": "Inside", "VolRatio": 1.35, "SMA50_Diff": 1.5, "SMA200_Diff": 4.1, "StopLoss": 96.50, "Volume": 18402910, "Score": 38.9},
-            {"Ticker": "INTC", "Company": "Intel Corp", "Sector": "Technology", "MarketCap": 92500000000, "PE": "84.00", "Price": 21.40, "Change": 0.80, "Drop52W": 35.0, "RSI": 32.4, "NearSupport": "Valid", "Q_Daily": "Above", "Q_4H": "Inside", "Q_1H": "Inside", "VolRatio": 1.20, "SMA50_Diff": -5.1, "SMA200_Diff": -15.2, "StopLoss": 20.10, "Volume": 45201940, "Score": 34.0},
-            {"Ticker": "QCOM", "Company": "QUALCOMM Inc", "Sector": "Technology", "MarketCap": 184200000000, "PE": "21.40", "Price": 165.50, "Change": -0.50, "Drop52W": 18.2, "RSI": 35.8, "NearSupport": "Valid", "Q_Daily": "Above", "Q_4H": "Above", "Q_1H": "Above", "VolRatio": 1.10, "SMA50_Diff": 0.8, "SMA200_Diff": 1.8, "StopLoss": 158.30, "Volume": 9801240, "Score": 32.1},
-            {"Ticker": "AMD", "Company": "Advanced Micro Devices", "Sector": "Technology", "MarketCap": 210000000000, "PE": "45.20", "Price": 130.40, "Change": -1.10, "Drop52W": 25.4, "RSI": 41.2, "NearSupport": "Normal", "Q_Daily": "Inside", "Q_4H": "Above", "Q_1H": "Inside", "VolRatio": 1.05, "SMA50_Diff": -1.1, "SMA200_Diff": 2.5, "StopLoss": 122.00, "Volume": 22000000, "Score": 29.5},
-            {"Ticker": "PYPL", "Company": "PayPal Holdings", "Sector": "Financial", "MarketCap": 68000000000, "PE": "16.20", "Price": 64.20, "Change": 0.30, "Drop52W": 31.5, "RSI": 34.1, "NearSupport": "Normal", "Q_Daily": "Below", "Q_4H": "Below", "Q_1H": "Below", "VolRatio": 0.95, "SMA50_Diff": -1.2, "SMA200_Diff": -2.5, "StopLoss": 61.00, "Volume": 12104920, "Score": 25.0},
-            {"Ticker": "BA", "Company": "Boeing Co", "Sector": "Industrials", "MarketCap": 98400000000, "PE": "-", "Price": 155.80, "Change": -1.20, "Drop52W": 28.4, "RSI": 31.0, "NearSupport": "Valid", "Q_Daily": "Below", "Q_4H": "Inside", "Q_1H": "Below", "VolRatio": 1.45, "SMA50_Diff": -3.2, "SMA200_Diff": -8.4, "StopLoss": 147.20, "Volume": 8502014, "Score": 22.0}
-        ]
-        existing_tickers = [r["Ticker"] for r in results]
-        for item in fallback_stocks:
-            if item["Ticker"] not in existing_tickers:
-                results.append(item)
-    
-    return results
+btn_col, _ = st.columns([1,4])
+with btn_col:
+    if st.button("🔄 Refresh Data", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
 
-col_btn, col_empty = st.columns([1, 4])
-with col_btn:
-    if st.button("🔄 Refresh Multi-TF Scan", type="primary"):
-        with st.spinner("Scanning market & calculating Multi-TF Q-Lines..."):
-            st.session_state['scan_res'] = run_market_scan()
+with st.spinner("در حال دریافت داده از Yahoo Finance..."):
+    scan_data, diagnostics = run_fast_market_scan()
 
-if 'scan_res' not in st.session_state:
-    st.session_state['scan_res'] = run_market_scan()
+df_res = pd.DataFrame(scan_data)
+if len(df_res):
+    st.success(f"دریافت داده موفق برای {len(df_res)} از {len(TICKERS)} نماد.")
+else:
+    st.error("هیچ نمادی داده دریافت نکرد. بخش تشخیص اتصال را باز کن تا خطای واقعی مشخص شود.")
+with st.expander("🔎 Yahoo connection diagnostics", expanded=df_res.empty):
+    st.caption(f"زمان اسکن: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.dataframe(pd.DataFrame(diagnostics), use_container_width=True, hide_index=True)
 
-df_res = pd.DataFrame(st.session_state['scan_res']).sort_values(by="Score", ascending=False).head(10)
-top_tickers = df_res['Ticker'].tolist()
-
+if not df_res.empty:
+    df_res = df_res.sort_values("Score", ascending=False).head(10)
+fallback = ["NVDA","AMD","INTC","TSLA","AAPL","MSFT"]
+top_tickers = df_res["Ticker"].tolist() if not df_res.empty else fallback.copy()
 while len(top_tickers) < 6:
-    top_tickers.extend(["NVDA", "AMD", "INTC", "TSLA", "AAPL", "MSFT"])
+    top_tickers.append(fallback[len(top_tickers) % len(fallback)])
+top_tickers = top_tickers[:6]
 
-def format_mcap(val):
-    try:
-        val = float(val)
-        if val >= 1e12:
-            return f"${val / 1e12:.2f}T"
-        elif val >= 1e9:
-            return f"${val / 1e9:.2f}B"
-        elif val >= 1e6:
-            return f"${val / 1e6:.2f}M"
-        else:
-            return f"${val:,.0f}"
-    except:
-        return str(val)
+def fmt_cap(value):
+    if pd.isna(value): return "N/A"
+    value = float(value)
+    if value >= 1e12: return f"${value/1e12:.2f}T"
+    if value >= 1e9: return f"${value/1e9:.2f}B"
+    if value >= 1e6: return f"${value/1e6:.2f}M"
+    return f"${value:,.0f}"
 
-def format_vol(val):
-    try:
-        val = float(val)
-        if val >= 1e9:
-            return f"{val / 1e9:.2f}B"
-        elif val >= 1e6:
-            return f"{val / 1e6:.2f}M"
-        elif val >= 1e3:
-            return f"{val / 1e3:.1f}K"
-        else:
-            return f"{val:,.0f}"
-    except:
-        return str(val)
+def fmt_volume(value):
+    value = float(value)
+    if value >= 1e9: return f"{value/1e9:.2f}B"
+    if value >= 1e6: return f"{value/1e6:.2f}M"
+    if value >= 1e3: return f"{value/1e3:.1f}K"
+    return f"{value:,.0f}"
 
 st.subheader("📊 Top Alpha Stocks (Multi-TF Q-Line Status: Daily, 4H, 1H)")
-
 rows_html = ""
-for idx, row in df_res.reset_index(drop=True).iterrows():
-    change_val = row['Change']
-    change_color = "#f87171" if change_val < 0 else "#4ade80"
-    change_str = f"{change_val:.2f}%" if change_val < 0 else f"+{change_val:.2f}%"
-    
-    vol_ratio = row['VolRatio']
-    vol_ratio_color = "#38bdf8" if vol_ratio >= 1.2 else "#cbd5e1"
-    
-    sma50_val = row['SMA50_Diff']
-    sma50_color = "#f87171" if sma50_val < 0 else "#4ade80"
-    sma50_str = f"{sma50_val:.2f}%" if sma50_val < 0 else f"+{sma50_val:.2f}%"
-    
-    sma200_val = row['SMA200_Diff']
-    sma200_color = "#f87171" if sma200_val < 0 else "#4ade80"
-    sma200_str = f"{sma200_val:.2f}%" if sma200_val < 0 else f"+{sma200_val:.2f}%"
-    
-    def get_q_color(stat):
-        if stat == "Above":
-            return "#4ade80"
-        elif stat == "Below":
-            return "#f87171"
-        else:
-            return "#fbbf24"
+if not df_res.empty:
+    for rank, row in enumerate(df_res.reset_index(drop=True).to_dict("records"), start=1):
+        chg = row["Change"]
+        chg_color = "#f87171" if chg < 0 else "#4ade80"
+        def q_color(value):
+            return "#4ade80" if value == "Above" else "#f87171" if value == "Below" else "#fbbf24"
+        s50, s200 = row["SMA50_Diff"], row["SMA200_Diff"]
+        cells = [
+            f"<td style='color:#94a3b8'>{rank}</td>",
+            f"<td><b style='color:#38bdf8'>{row['Ticker']}</b></td>",
+            f"<td style='text-align:left;color:#f1f5f9'>{row['Company']}</td>",
+            f"<td style='color:#38bdf8'>{fmt_cap(row['MarketCap'])}</td>",
+            f"<td style='color:#fff'>${row['Price']:.2f}</td>",
+            f"<td style='color:{chg_color}'>{chg:+.2f}%</td>",
+            f"<td style='color:#fbbf24'>-{row['Drop52W']:.2f}%</td>",
+            f"<td style='color:#38bdf8'>{row['RSI']:.2f}</td>",
+            f"<td style='color:#4ade80'>{row['NearSupport']}</td>",
+            f"<td style='color:{q_color(row['Q_Daily'])}'>{row['Q_Daily']}</td>",
+            f"<td style='color:{q_color(row['Q_4H'])}'>{row['Q_4H']}</td>",
+            f"<td style='color:{q_color(row['Q_1H'])}'>{row['Q_1H']}</td>",
+            f"<td style='color:#cbd5e1'>{fmt_volume(row['Volume'])}</td>",
+            f"<td style='color:{'#38bdf8' if row['VolRatio'] >= 1.2 else '#cbd5e1'}'>{row['VolRatio']:.2f}x</td>",
+            f"<td style='color:{'#f87171' if s50 < 0 else '#4ade80'}'>{s50:+.2f}%</td>",
+            f"<td style='color:{'#f87171' if s200 < 0 else '#4ade80'}'>{s200:+.2f}%</td>",
+            f"<td style='color:#f87171'>${row['StopLoss']:.2f}</td>",
+        ]
+        rows_html += "<tr>" + "".join(cells) + "</tr>"
 
-    q_d_color = get_q_color(row['Q_Daily'])
-    q_4h_color = get_q_color(row['Q_4H'])
-    q_1h_color = get_q_color(row['Q_1H'])
-
-    mcap_str = format_mcap(row['MarketCap'])
-    vol_str = format_vol(row['Volume'])
-    
-    row_snippet = (
-        "<tr>"
-        f"<td style='color:#94a3b8; font-weight:bold;'>{idx + 1}</td>"
-        f"<td><b style='color:#38bdf8;'>{row['Ticker']}</b></td>"
-        f"<td style='text-align:left; color:#f1f5f9; padding-left:6px;'>{row['Company']}</td>"
-        f"<td style='color:#38bdf8; font-weight:bold;'>{mcap_str}</td>"
-        f"<td style='color:#ffffff; font-weight:bold;'>${row['Price']:.2f}</td>"
-        f"<td style='color:{change_color}; font-weight:bold;'>{change_str}</td>"
-        f"<td style='color:#fbbf24; font-weight:bold;'>-{row['Drop52W']}%</td>"
-        f"<td style='color:#38bdf8; font-weight:bold;'>{row['RSI']}</td>"
-        f"<td style='color:#4ade80; font-weight:bold;'>{row['NearSupport']}</td>"
-        f"<td style='color:{q_d_color}; font-weight:bold;'>{row['Q_Daily']}</td>"
-        f"<td style='color:{q_4h_color}; font-weight:bold;'>{row['Q_4H']}</td>"
-        f"<td style='color:{q_1h_color}; font-weight:bold;'>{row['Q_1H']}</td>"
-        f"<td style='color:#cbd5e1; font-weight:bold;'>{vol_str}</td>"
-        f"<td style='color:{vol_ratio_color}; font-weight:bold;'>{vol_ratio}x</td>"
-        f"<td style='color:{sma50_color}; font-weight:bold;'>{sma50_str}</td>"
-        f"<td style='color:{sma200_color}; font-weight:bold;'>{sma200_str}</td>"
-        f"<td style='color:#f87171; font-weight:bold;'>${row['StopLoss']}</td>"
-        "</tr>"
-    )
-    rows_html += row_snippet
-
-finviz_table_html = (
-    "<!DOCTYPE html><html><head><style>"
-    "body { margin: 0; padding: 0; background-color: #131722; font-family: Arial, sans-serif; }"
-    "table { width: 100%; border-collapse: collapse; background-color: #131722; color: #d1d4dc; table-layout: fixed; }"
-    "th { background-color: #1e222d; color: #f8fafc; font-size: 12px; font-weight: bold; padding: 8px 2px; text-align: center; border-bottom: 2px solid #2a2e39; white-space: nowrap; }"
-    "td { padding: 8px 2px; text-align: center; border-bottom: 1px solid #2a2e39; font-size: 14px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }"
-    "tr:hover { background-color: #1e222d; }"
-    "</style></head><body><table><thead><tr>"
-    "<th style='width: 2.5%;'>No</th>"
-    "<th style='width: 5.5%;'>Ticker</th>"
-    "<th style='width: 11.5%; text-align:left; padding-left:6px;'>Company</th>"
-    "<th style='width: 6.5%;'>Cap</th>"
-    "<th style='width: 5.5%;'>Price</th>"
-    "<th style='width: 5.5%;'>Chg %</th>"
-    "<th style='width: 6.5%;'>52W Drop</th>"
-    "<th style='width: 4.5%;'>RSI</th>"
-    "<th style='width: 6.0%;'>Support</th>"
-    "<th style='width: 5.5%;'>Q(D)</th>"
-    "<th style='width: 5.5%;'>Q(4H)</th>"
-    "<th style='width: 5.5%;'>Q(1H)</th>"
-    "<th style='width: 6.0%;'>Volume</th>"
-    "<th style='width: 5.0%;'>RVol</th>"
-    "<th style='width: 6.0%;'>SMA50</th>"
-    "<th style='width: 6.0%;'>SMA200</th>"
-    "<th style='width: 6.5%;'>StopLoss</th>"
-    f"</tr></thead><tbody>{rows_html}</tbody></table></body></html>"
-)
-
-components.html(finviz_table_html, height=480, scrolling=False)
+table_html = """
+<!DOCTYPE html><html><head><style>
+body{margin:0;padding:0;background:#131722;font-family:Arial,sans-serif}
+table{width:100%;border-collapse:collapse;background:#131722;color:#d1d4dc;table-layout:fixed}
+th{background:#1e222d;color:#f8fafc;font-size:12px;font-weight:bold;padding:8px 2px;text-align:center;border-bottom:2px solid #2a2e39;white-space:nowrap}
+td{padding:8px 2px;text-align:center;border-bottom:1px solid #2a2e39;font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+tr:hover{background:#1e222d}
+</style></head><body><table><thead><tr>
+<th style='width:2.5%'>No</th><th style='width:5.5%'>Ticker</th><th style='width:11.5%;text-align:left'>Company</th>
+<th style='width:6.5%'>Cap</th><th style='width:5.5%'>Price</th><th style='width:5.5%'>Chg %</th>
+<th style='width:6.5%'>52W Drop</th><th style='width:4.5%'>RSI</th><th style='width:6%'>Support</th>
+<th style='width:5.5%'>Q(D)</th><th style='width:5.5%'>Q(4H)</th><th style='width:5.5%'>Q(1H)</th>
+<th style='width:6%'>Volume</th><th style='width:5%'>RVol</th><th style='width:6%'>SMA50</th>
+<th style='width:6%'>SMA200</th><th style='width:6.5%'>StopLoss</th>
+</tr></thead><tbody>
+""" + rows_html + "</tbody></table></body></html>"
+components.html(table_html, height=480, scrolling=True)
 
 st.markdown("---")
-
 st.subheader("🖥️ 6-Chart Live TradingView Grid (Auto-Synced with Top Table)")
-
-tf = st.radio("Global Timeframe:", ["5", "60", "240", "D"], index=3, horizontal=True, format_func=lambda x: {"5": "5m", "60": "1H", "240": "4H", "D": "1D"}[x])
+timeframe = st.radio("Global Timeframe:", ["5","60","240","D"], index=3, horizontal=True,
+                     format_func=lambda x: {"5":"5m","60":"1H","240":"4H","D":"1D"}[x])
 
 def render_chart(symbol, interval, height=750):
-    widget_html = f"""
-    <html style="margin:0;padding:0;height:100%;">
-    <body style="margin:0;padding:0;height:100%;background-color:#131722;">
-    <div class="tradingview-widget-container" style="height:100%;width:100%;">
-      <div class="tradingview-widget-container__widget" style="height:100%;width:100%;"></div>
+    symbol = "".join(ch for ch in str(symbol).upper().strip() if ch.isalnum() or ch in ".-_")
+    if not symbol:
+        st.warning("لطفاً نماد معتبر وارد کن.")
+        return
+    widget = f"""
+    <html style="margin:0;padding:0;height:100%"><body style="margin:0;padding:0;height:100%;background:#131722">
+    <div class="tradingview-widget-container" style="height:100%;width:100%">
+      <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
       <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
       {{
-        "autosize": true,
-        "symbol": "{symbol}",
-        "interval": "{interval}",
-        "timezone": "Etc/UTC",
-        "theme": "dark",
-        "style": "1",
-        "locale": "en",
-        "allow_symbol_change": true,
-        "studies": [
-          "IchimokuCloud@tv-basicstudies",
-          "RSI@tv-basicstudies",
-          "MACD@tv-basicstudies",
-          "Moving Average Weighted@tv-basicstudies"
-        ],
-        "support_host": "https://www.tradingview.com"
+        "autosize":true,"symbol":"{symbol}","interval":"{interval}",
+        "timezone":"Etc/UTC","theme":"dark","style":"1","locale":"en",
+        "allow_symbol_change":true,
+        "studies":["IchimokuCloud@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies","Moving Average Weighted@tv-basicstudies"],
+        "support_host":"https://www.tradingview.com"
       }}
       </script>
-    </div>
-    </body>
-    </html>
+    </div></body></html>
     """
-    components.html(widget_html, height=height)
+    components.html(widget, height=height)
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    sym1 = st.text_input("Chart 1 (Rank 1)", value=top_tickers[0], key="s1").upper()
-    render_chart(sym1, tf, height=750)
-
-with c2:
-    sym2 = st.text_input("Chart 2 (Rank 2)", value=top_tickers[1], key="s2").upper()
-    render_chart(sym2, tf, height=750)
-
-with c3:
-    sym3 = st.text_input("Chart 3 (Rank 3)", value=top_tickers[2], key="s3").upper()
-    render_chart(sym3, tf, height=750)
-
-c4, c5, c6 = st.columns(3)
-with c4:
-    sym4 = st.text_input("Chart 4 (Rank 4)", value=top_tickers[3], key="s4").upper()
-    render_chart(sym4, tf, height=750)
-
-with c5:
-    sym5 = st.text_input("Chart 5 (Rank 5)", value=top_tickers[4], key="s5").upper()
-    render_chart(sym5, tf, height=750)
-
-with c6:
-    sym6 = st.text_input("Chart 6 (Rank 6)", value=top_tickers[5], key="s6").upper()
-    render_chart(sym6, tf, height=750)
+for row_idx in range(2):
+    chart_cols = st.columns(3)
+    for col_idx, col in enumerate(chart_cols):
+        idx = row_idx*3 + col_idx
+        with col:
+            symbol = st.text_input(f"Chart {idx+1} (Rank {idx+1})",
+                                   value=top_tickers[idx], key=f"chart_symbol_{idx+1}")
+            render_chart(symbol, timeframe, height=750)
