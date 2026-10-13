@@ -1,4 +1,27 @@
 import streamlit as st
+
+# سیستم ورود با رمز عبور
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "Elel12!@":  # رمز عبور دلخواه
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("لطفاً رمز عبور را وارد کنید:", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("لطفاً رمز عبور را وارد کنید:", type="password", on_change=password_entered, key="password")
+        st.error("😕 رمز عبور اشتباه است")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop()
+import streamlit as st
 import pandas as pd
 import yfinance as yf
 import numpy as np
