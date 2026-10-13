@@ -1,9 +1,13 @@
 import streamlit as st
+import pandas as pd
+import yfinance as yf
+import numpy as np
+import streamlit.components.v1 as components
 
-# سیستم ورود با رمز عبور
+# --- سیستم ورود با رمز عبور ---
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "Ele12!@":  # رمز عبور دلخواه
+        if st.session_state["password"] == "ELe12!@":  # می‌توانید رمز عبور را اینجا تغییر دهید
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
@@ -21,15 +25,11 @@ def check_password():
 
 if not check_password():
     st.stop()
-import streamlit as st
-import pandas as pd
-import yfinance as yf
-import numpy as np
-import streamlit.components.v1 as components
 
+# --- تنظیمات صفحه استریم‌لیت ---
 st.set_page_config(layout="wide", page_title="Alpha Market Scanner & 6-Grid Monitor")
 
-# تنظیمات استایل صفحه و بزرگ‌تر کردن تیترهای استریملیت
+# تنظیمات استایل صفحه و بزرگ‌تر کردن تیترها
 st.markdown("""
 <style>
     .block-container {
@@ -136,7 +136,7 @@ def run_market_scan():
                     "Ticker": ticker,
                     "Company": info.get('shortName', ticker),
                     "Sector": info.get('sector', 'Technology'),
-                    "MarketCap": round(mcap / 1e9, 2),
+                    "MarketCap": mcap,  # مقدار خام ذخیره می‌شود
                     "PE": pe_str,
                     "Price": round(curr_p, 2),
                     "Change": price_change,
@@ -155,12 +155,12 @@ def run_market_scan():
 
     if not results:
         results = [
-            {"Ticker": "MU", "Company": "Micron Technology", "Sector": "Technology", "MarketCap": 112.00, "PE": "18.50", "Price": 102.30, "Change": -2.10, "Drop52W": 22.1, "RSI": 33.5, "VolRatio": 1.35, "NearSupport": "Valid", "SMA50_Diff": 1.5, "SMA200_Diff": 4.1, "StopLoss": 96.50, "Volume": 18402910, "Score": 38.9},
-            {"Ticker": "BA", "Company": "Boeing Co", "Sector": "Industrials", "MarketCap": 98.40, "PE": "-", "Price": 155.80, "Change": -1.20, "Drop52W": 28.4, "RSI": 31.0, "VolRatio": 1.45, "NearSupport": "Valid", "SMA50_Diff": -3.2, "SMA200_Diff": -8.4, "StopLoss": 147.20, "Volume": 8502014, "Score": 34.2},
-            {"Ticker": "QCOM", "Company": "QUALCOMM Inc", "Sector": "Technology", "MarketCap": 184.20, "PE": "21.40", "Price": 165.50, "Change": -0.50, "Drop52W": 18.2, "RSI": 35.8, "VolRatio": 1.10, "NearSupport": "Valid", "SMA50_Diff": 0.8, "SMA200_Diff": 1.8, "StopLoss": 158.30, "Volume": 9801240, "Score": 32.1},
-            {"Ticker": "PYPL", "Company": "PayPal Holdings", "Sector": "Financial", "MarketCap": 68.00, "PE": "16.20", "Price": 64.20, "Change": 0.30, "Drop52W": 31.5, "RSI": 34.1, "VolRatio": 0.95, "NearSupport": "Normal", "SMA50_Diff": -1.2, "SMA200_Diff": -2.5, "StopLoss": 61.00, "Volume": 12104920, "Score": 25.0},
-            {"Ticker": "INTC", "Company": "Intel Corp", "Sector": "Technology", "MarketCap": 92.50, "PE": "84.00", "Price": 21.40, "Change": 0.80, "Drop52W": 35.0, "RSI": 32.4, "VolRatio": 1.20, "NearSupport": "Valid", "SMA50_Diff": -5.1, "SMA200_Diff": -15.2, "StopLoss": 20.10, "Volume": 45201940, "Score": 24.0},
-            {"Ticker": "DIS", "Company": "Walt Disney Co", "Sector": "Communication", "MarketCap": 172.50, "PE": "32.10", "Price": 94.10, "Change": 1.10, "Drop52W": 25.0, "RSI": 38.2, "VolRatio": 1.05, "NearSupport": "Normal", "SMA50_Diff": -2.4, "SMA200_Diff": -5.6, "StopLoss": 89.90, "Volume": 11304920, "Score": 19.8}
+            {"Ticker": "MU", "Company": "Micron Technology", "Sector": "Technology", "MarketCap": 1120000000000, "PE": "18.50", "Price": 102.30, "Change": -2.10, "Drop52W": 22.1, "RSI": 33.5, "VolRatio": 1.35, "NearSupport": "Valid", "SMA50_Diff": 1.5, "SMA200_Diff": 4.1, "StopLoss": 96.50, "Volume": 18402910, "Score": 38.9},
+            {"Ticker": "BA", "Company": "Boeing Co", "Sector": "Industrials", "MarketCap": 98400000000, "PE": "-", "Price": 155.80, "Change": -1.20, "Drop52W": 28.4, "RSI": 31.0, "VolRatio": 1.45, "NearSupport": "Valid", "SMA50_Diff": -3.2, "SMA200_Diff": -8.4, "StopLoss": 147.20, "Volume": 8502014, "Score": 34.2},
+            {"Ticker": "QCOM", "Company": "QUALCOMM Inc", "Sector": "Technology", "MarketCap": 184200000000, "PE": "21.40", "Price": 165.50, "Change": -0.50, "Drop52W": 18.2, "RSI": 35.8, "VolRatio": 1.10, "NearSupport": "Valid", "SMA50_Diff": 0.8, "SMA200_Diff": 1.8, "StopLoss": 158.30, "Volume": 9801240, "Score": 32.1},
+            {"Ticker": "PYPL", "Company": "PayPal Holdings", "Sector": "Financial", "MarketCap": 68000000000, "PE": "16.20", "Price": 64.20, "Change": 0.30, "Drop52W": 31.5, "RSI": 34.1, "VolRatio": 0.95, "NearSupport": "Normal", "SMA50_Diff": -1.2, "SMA200_Diff": -2.5, "StopLoss": 61.00, "Volume": 12104920, "Score": 25.0},
+            {"Ticker": "INTC", "Company": "Intel Corp", "Sector": "Technology", "MarketCap": 92500000000, "PE": "84.00", "Price": 21.40, "Change": 0.80, "Drop52W": 35.0, "RSI": 32.4, "VolRatio": 1.20, "NearSupport": "Valid", "SMA50_Diff": -5.1, "SMA200_Diff": -15.2, "StopLoss": 20.10, "Volume": 45201940, "Score": 24.0},
+            {"Ticker": "DIS", "Company": "Walt Disney Co", "Sector": "Communication", "MarketCap": 172500000000, "PE": "32.10", "Price": 94.10, "Change": 1.10, "Drop52W": 25.0, "RSI": 38.2, "VolRatio": 1.05, "NearSupport": "Normal", "SMA50_Diff": -2.4, "SMA200_Diff": -5.6, "StopLoss": 89.90, "Volume": 11304920, "Score": 19.8}
         ]
     return results
 
@@ -181,7 +181,22 @@ top_tickers = df_res['Ticker'].tolist()
 while len(top_tickers) < 6:
     top_tickers.extend(["SOXS", "NVDA", "AMD", "NVTS", "SOXL", "SOXX"])
 
-# --- بخش اول: جدول با فونت بسیار بزرگ و تیترهای انگلیسی ---
+# --- تابع فرمت‌بندی هوشمند مارکت کپ ($T برای تریلیون و $B برای میلیارد) ---
+def format_mcap(val):
+    try:
+        val = float(val)
+        if val >= 1e12:
+            return f"${val / 1e12:.2f}T"
+        elif val >= 1e9:
+            return f"${val / 1e9:.2f}B"
+        elif val >= 1e6:
+            return f"${val / 1e6:.2f}M"
+        else:
+            return f"${val:,.0f}"
+    except:
+        return str(val)
+
+# --- بخش اول: جدول با فونت بزرگ و فرمت اصلاح شده ---
 st.subheader("📊 Top 10 Alpha Stocks (Valid Support & Low Risk)")
 
 rows_html = ""
@@ -195,7 +210,7 @@ for idx, row in df_res.reset_index(drop=True).iterrows():
     sma200_color = "#f23645" if row['SMA200_Diff'] < 0 else "#089981"
     sma200_str = f"{row['SMA200_Diff']:.2f}%" if row['SMA200_Diff'] < 0 else f"+{row['SMA200_Diff']:.2f}%"
     
-    vol_formatted = f"{row['Volume']:,}"
+    mcap_str = format_mcap(row['MarketCap'])
     
     rows_html += f"""
     <tr>
@@ -203,7 +218,7 @@ for idx, row in df_res.reset_index(drop=True).iterrows():
         <td><b style="color:#4ba2ff;">{row['Ticker']}</b></td>
         <td style="text-align:left; color:#d1d4dc;">{row['Company']}</td>
         <td>{row['Sector']}</td>
-        <td>${row['MarketCap']}B</td>
+        <td style="color:#00ffcc; font-weight:bold;">{mcap_str}</td>
         <td style="color:#ff5252;">{row['PE']}</td>
         <td style="color:#ffffff; font-weight:bold;">${row['Price']:.2f}</td>
         <td style="color:{change_color}; font-weight:bold;">{change_str}</td>
@@ -263,7 +278,7 @@ finviz_table_html = f"""
                 <th style="width: 6%;">Ticker</th>
                 <th style="width: 14%; text-align:left;">Company</th>
                 <th style="width: 10%;">Sector</th>
-                <th style="width: 7%;">MarketCap</th>
+                <th style="width: 8%;">MarketCap</th>
                 <th style="width: 5%;">P/E</th>
                 <th style="width: 6%;">Price</th>
                 <th style="width: 6%;">Change %</th>
@@ -288,7 +303,7 @@ components.html(finviz_table_html, height=620, scrolling=True)
 
 st.markdown("---")
 
-# --- بخش دوم: شبکه ۶ نموداره با اتصال خودکار به جدول و قابلیت ویرایش دستی ---
+# --- بخش دوم: شبکه ۶ نموداره با اتصال خودکار به جدول ---
 st.subheader("🖥️ 6-Chart Live TradingView Grid (Auto-Synced with Top Table)")
 
 tf = st.radio("Global Timeframe:", ["5", "60", "240", "D"], index=1, horizontal=True, format_func=lambda x: {"5": "5m", "60": "1H", "240": "4H", "D": "1D"}[x])
