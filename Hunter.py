@@ -3,7 +3,7 @@ import streamlit as st
 # سیستم ورود با رمز عبور
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "Elel12!@":  # رمز عبور دلخواه
+        if st.session_state["password"] == "Ele12!@":  # رمز عبور دلخواه
             st.session_state["password_correct"] = True
             del st.session_state["password"]
         else:
