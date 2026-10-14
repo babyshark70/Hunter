@@ -569,6 +569,16 @@ with st.expander("🔎 Yahoo connection diagnostics", expanded=df_res.empty):
     st.caption(f"زمان اسکن: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     st.dataframe(pd.DataFrame(diagnostics), use_container_width=True, hide_index=True)
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def lookup_industry(ticker):
+    """Fetch industry label from Yahoo metadata; return N/A rather than inventing one."""
+    try:
+        info = yf.Ticker(str(ticker)).get_info()
+        industry = info.get("industry") if isinstance(info, dict) else None
+        return str(industry).strip() if industry else "N/A"
+    except Exception:
+        return "N/A"
+
 if not df_res.empty:
     # Discovery ranking favors early recovery evidence and subtracts falling-knife risk.
     df_res = df_res.sort_values(["Score", "EarlyRecoveryScore"], ascending=[False, False]).head(10)
@@ -597,16 +607,6 @@ def fmt_volume(value):
     if value >= 1e6: return f"{value/1e6:.2f}M"
     if value >= 1e3: return f"{value/1e3:.1f}K"
     return f"{value:,.0f}"
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def lookup_industry(ticker):
-    """Fetch industry label from Yahoo metadata; return N/A rather than inventing one."""
-    try:
-        info = yf.Ticker(str(ticker)).get_info()
-        industry = info.get("industry") if isinstance(info, dict) else None
-        return str(industry).strip() if industry else "N/A"
-    except Exception:
-        return "N/A"
 
 st.caption(f"Universe: {len(TICKERS)} نماد | منبع: {UNIVERSE_SOURCE}")
 st.caption("رتبه‌بندی فرصت کف: افت قبلی + تضعیف فشار فروش/جذب عرضه + تثبیت و Higher Low + شکست ساختار نزولی + قدرت نسبی بهتر؛ امتیاز Falling-Knife Risk از رتبه کم می‌کند. این امتیاز فقط برای کشف و رتبه‌بندی است و سیگنال BUY نیست.")
