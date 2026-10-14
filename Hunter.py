@@ -62,7 +62,7 @@ def get_dynamic_universe():
             EquityQuery("eq", ["region", "us"]),
             # EquityQuery is-in expects each allowed value as a separate operand.
             EquityQuery("is-in", ["exchange", "NMS", "NYQ", "ASE"]),
-            EquityQuery("gte", ["intradaymarketcap", 25_000_000_000]),
+            EquityQuery("gte", ["intradaymarketcap", 15_000_000_000]),
             EquityQuery("lte", ["intradaymarketcap", 6_000_000_000_000]),
             EquityQuery("gte", ["intradayprice", 5]),
         ])
@@ -86,25 +86,26 @@ def get_dynamic_universe():
             except (TypeError, ValueError):
                 cap = np.nan
             # Keep only entries with a valid market cap in the requested range.
-            if not np.isfinite(cap) or not (25_000_000_000 <= cap <= 6_000_000_000_000):
+            if not np.isfinite(cap) or not (15_000_000_000 <= cap <= 6_000_000_000_000):
                 continue
             if symbol not in metadata:
                 symbols.append(symbol)
                 metadata[symbol] = {
                     "MarketCap": cap,
                     "Company": item.get("longName") or item.get("shortName") or symbol,
+                    "Industry": item.get("industry") or item.get("industryName") or "",
                 }
         if len(symbols) >= 250:
             selected_symbols = symbols[:300]
             selected_metadata = {symbol: metadata[symbol] for symbol in selected_symbols}
-            return selected_symbols, selected_metadata, "Yahoo Screener ($25B–$6T; market-cap verified)"
+            return selected_symbols, selected_metadata, "Yahoo Screener ($15B–$6T; market-cap verified)"
         screen_error = f"Screener returned only {len(symbols)} verified symbols"
     except Exception as exc:
         screen_error = f"{type(exc).__name__}: {exc}"
     # This fallback is intentionally marked as unverified: never claim its market caps are live-verified.
     symbols = list(dict.fromkeys(FALLBACK_TICKERS))[:300]
-    metadata = {symbol: {"MarketCap": np.nan, "Company": symbol} for symbol in symbols}
-    return symbols, metadata, f"Fallback list ({len(symbols)} symbols; $25B cap not verified): {screen_error}"
+    metadata = {symbol: {"MarketCap": np.nan, "Company": symbol, "Industry": ""} for symbol in symbols}
+    return symbols, metadata, f"Fallback list ({len(symbols)} symbols; $15B cap not verified): {screen_error}"
 
 TICKERS, UNIVERSE_META, UNIVERSE_SOURCE = get_dynamic_universe()
 OHLCV = ["Open","High","Low","Close","Volume"]
@@ -197,36 +198,98 @@ def fetch_history(ticker):
         yf_error = f"{type(exc).__name__}: {exc}"
     return pd.DataFrame(), None, f"Direct API: {direct_error} | yfinance: {yf_error}"
 
-def calc_q_line(frame):
-    """Return (status, value) for Q-Line, defined here as Ichimoku Kijun-26.
+def q_cloud_analysis(frame):
+    """Analyze the *visually aligned* Q-Line and Ichimoku cloud from the user's Pine script.
 
-    The line is the midpoint of the highest high and lowest low over the last
-    26 completed bars of the same timeframe. Status compares the latest close
-    with that numeric line. Insufficient/malformed data returns N/A and NaN.
+    Quality Line = Kijun-26 plotted with offset +26, so the value visible at the
+    latest chart bar is BaseLine[26] (iloc[-27]). The cloud is plotted with
+    offset displacement-1 = +25, so its value visible at the latest bar is
+    SpanA[25]/SpanB[25] (iloc[-26]). This alignment avoids a 25/26-bar mismatch.
+    Returns a dict of position, Q-Line value, cloud bounds, cloud color/direction,
+    distance, and a concise event/alert.
     """
-    if frame is None or frame.empty or len(frame) < 26:
-        return "N/A", np.nan
+    empty = {"status":"N/A", "value":np.nan, "cloud_low":np.nan,
+             "cloud_high":np.nan, "cloud_color":"N/A", "cloud_move":"N/A",
+             "distance_pct":np.nan, "event":"Insufficient data"}
+    if frame is None or frame.empty or len(frame) < 78:
+        return empty.copy()
     try:
         high = pd.to_numeric(frame["High"], errors="coerce")
         low = pd.to_numeric(frame["Low"], errors="coerce")
         close = pd.to_numeric(frame["Close"], errors="coerce")
-        q_line = (high.rolling(26, min_periods=26).max() +
-                  low.rolling(26, min_periods=26).min()) / 2
-        q_value = float(q_line.iloc[-1])
-        last_close = float(close.iloc[-1])
-        if not np.isfinite(q_value) or not np.isfinite(last_close):
-            return "N/A", np.nan
-        tolerance = max(abs(q_value) * 0.0005, 0.01)
-        if last_close > q_value + tolerance:
-            status = "Above"
-        elif last_close < q_value - tolerance:
-            status = "Below"
-        else:
-            status = "On Q"
-        return status, q_value
-    except (KeyError, TypeError, ValueError, IndexError):
-        return "N/A", np.nan
+        def donchian(length):
+            return (high.rolling(length, min_periods=length).max() +
+                    low.rolling(length, min_periods=length).min()) / 2
+        conversion = donchian(9)
+        baseline = donchian(26)
+        span_a = (conversion + baseline) / 2
+        span_b = donchian(52)
 
+        # Pine offsets are display shifts, not shifts to the underlying series.
+        q_value = float(baseline.iloc[-27])       # plot(baseLine, offset=+26)
+        span_a_now = float(span_a.iloc[-26])      # cloud offset=+25
+        span_b_now = float(span_b.iloc[-26])
+        span_a_prev = float(span_a.iloc[-27])
+        span_b_prev = float(span_b.iloc[-27])
+        last_close = float(close.iloc[-1])
+        values = [q_value, span_a_now, span_b_now, span_a_prev, span_b_prev, last_close]
+        if not all(np.isfinite(v) for v in values):
+            return empty.copy()
+
+        cloud_low, cloud_high = min(span_a_now, span_b_now), max(span_a_now, span_b_now)
+        if q_value < cloud_low:
+            status = "Below Cloud"
+        elif q_value > cloud_high:
+            status = "Above Cloud"
+        else:
+            status = "Inside Cloud"
+        cloud_color = "Green" if span_a_now > span_b_now else "Red"
+        mid_now = (span_a_now + span_b_now) / 2
+        mid_prev = (span_a_prev + span_b_prev) / 2
+        cloud_delta_pct = (mid_now - mid_prev) / abs(mid_prev) * 100 if mid_prev else 0.0
+        cloud_move = "Up" if cloud_delta_pct > 0.05 else "Down" if cloud_delta_pct < -0.05 else "Flat"
+        gap = (cloud_low - q_value) if q_value < cloud_low else (q_value - cloud_high) if q_value > cloud_high else 0.0
+        distance_pct = gap / abs(q_value) * 100 if q_value else np.nan
+
+        # Events use the prior aligned bar, to distinguish first contact/entry from a static state.
+        q_prev = float(baseline.iloc[-28]) if len(baseline) >= 78 and pd.notna(baseline.iloc[-28]) else np.nan
+        lo_prev = min(float(span_a.iloc[-27]), float(span_b.iloc[-27]))
+        hi_prev = max(float(span_a.iloc[-27]), float(span_b.iloc[-27]))
+        if q_value < cloud_low:
+            # Primary condition requested by the user: Q-Line outside and below the cloud.
+            if np.isfinite(q_prev) and q_prev >= lo_prev:
+                event = "OUTSIDE BELOW — Q-Line exited cloud"
+            elif distance_pct <= 0.5:
+                event = "OUTSIDE BELOW — near cloud"
+            else:
+                event = "OUTSIDE BELOW — Q-Line alert"
+        elif q_value > cloud_high:
+            # Track this as a separate position, not a bearish alert by itself.
+            if np.isfinite(q_prev) and q_prev <= hi_prev:
+                event = "OUTSIDE ABOVE — Q-Line exited cloud (separate status)"
+            elif distance_pct <= 0.5:
+                event = "OUTSIDE ABOVE — near cloud"
+            else:
+                event = "OUTSIDE ABOVE — separate status; not bearish by itself"
+        else:
+            if np.isfinite(q_prev) and (q_prev < lo_prev or q_prev > hi_prev):
+                event = "Q-Line re-entered cloud — outside alert cleared"
+            else:
+                # User said the inside-cloud state is not important; keep it neutral.
+                event = "Inside cloud — no outside alert"
+        if cloud_color == "Red" and cloud_move == "Up":
+            event += " | Red cloud rising"
+        return {"status":status, "value":q_value, "cloud_low":cloud_low,
+                "cloud_high":cloud_high, "cloud_color":cloud_color,
+                "cloud_move":cloud_move, "distance_pct":distance_pct, "event":event}
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+        return empty.copy()
+
+
+def calc_q_line(frame):
+    """Backward-compatible (Q-Line position vs aligned cloud, Q-Line value)."""
+    result = q_cloud_analysis(frame)
+    return result["status"], result["value"]
 
 def calc_q_status(frame):
     # Backward-compatible status-only helper.
@@ -278,10 +341,155 @@ def resample_4h(frame):
     except Exception:
         return pd.DataFrame()
 
+def early_recovery_metrics(frame, hourly, benchmark=None):
+    """Rank potential early bottoms using observable price/volume evidence only.
+
+    This is a discovery/ranking score, not a BUY signal. Missing evidence earns
+    no bonus; the existing Q-Line display and other app behavior remain separate.
+    """
+    result = {
+        "EarlyRecoveryScore": 0, "FallingKnifeRisk": 50,
+        "SellingPressure": "نامشخص", "Stabilization": "نامشخص",
+        "HigherLow": "نامشخص", "BearishStructureBreak": "نامشخص",
+        "RelativeStrength": "نامشخص", "ReboundFromLowPct": np.nan,
+        "RecoveryStage": "شواهد ناکافی"
+    }
+    try:
+        close = frame["Close"].astype(float).dropna()
+        high = frame["High"].astype(float).reindex(close.index)
+        low = frame["Low"].astype(float).reindex(close.index)
+        volume = frame["Volume"].fillna(0).astype(float).reindex(close.index)
+        if len(close) < 30 or close.iloc[-1] <= 0:
+            return result
+        price = float(close.iloc[-1])
+        score = 0.0
+        knife = 0.0
+
+        # 1) Meaningful prior decline: discovery context, not a reason by itself to buy.
+        peak60 = float(high.iloc[-60:].max())
+        drop60 = max(0.0, (peak60-price)/peak60*100) if peak60 > 0 else 0.0
+        score += min(20.0, drop60 * 0.65) if drop60 >= 8 else 0.0
+
+        # 2) Selling pressure: are recent down-day volumes fading vs earlier down days?
+        change = close.diff()
+        down_mask = change < 0
+        recent_down_vol = volume.iloc[-5:][down_mask.iloc[-5:]]
+        prior_down_vol = volume.iloc[-25:-5][down_mask.iloc[-25:-5]]
+        pressure_fading = False
+        if len(recent_down_vol) >= 2 and len(prior_down_vol) >= 3 and float(prior_down_vol.mean()) > 0:
+            ratio = float(recent_down_vol.mean()) / float(prior_down_vol.mean())
+            pressure_fading = ratio < 0.85
+            if pressure_fading:
+                score += 18.0 if ratio < 0.65 else 12.0
+                result["SellingPressure"] = f"فشار فروش ضعیف‌تر ({ratio:.2f}x)"
+            else:
+                result["SellingPressure"] = f"هنوز قوی ({ratio:.2f}x)"
+        elif len(recent_down_vol) < 2:
+            # Fewer recent red days is mildly constructive, but not proof of absorption.
+            if int(down_mask.iloc[-5:].sum()) <= 2:
+                score += 5.0
+                result["SellingPressure"] = "روزهای نزولی کمتر"
+
+        # Absorption clue: unusually active session that closes in the upper half of its range.
+        last_range = max(float(high.iloc[-1]-low.iloc[-1]), price*0.001)
+        close_location = (price-float(low.iloc[-1]))/last_range
+        base_vol = float(volume.iloc[-21:-1].median()) if len(volume) >= 21 else 0.0
+        if base_vol > 0 and float(volume.iloc[-1]) >= 1.25*base_vol and close_location >= 0.65:
+            score += 8.0
+
+        # 3) Stabilization and higher low: compare two completed 5-session windows.
+        recent_low = float(low.iloc[-5:].min())
+        prior_low = float(low.iloc[-10:-5].min())
+        stabilizing = recent_low >= prior_low * 0.985
+        if stabilizing:
+            score += 10.0
+            result["Stabilization"] = "تثبیت نسبی"
+        else:
+            result["Stabilization"] = "کف پایین‌تر"
+            knife += 18.0
+        higher_low = recent_low > prior_low * 1.005
+        if higher_low:
+            score += 12.0
+            result["HigherLow"] = "بله"
+        else:
+            result["HigherLow"] = "خیر/تأییدنشده"
+
+        # A break is only counted when the latest close clears a short-term prior swing high.
+        prior_swing_high = float(high.iloc[-6:-1].max())
+        daily_break = price > prior_swing_high
+        hourly_break = False
+        if hourly is not None and not hourly.empty and len(hourly) >= 25:
+            hc = hourly["Close"].astype(float).dropna()
+            hh = hourly["High"].astype(float).reindex(hc.index)
+            hourly_break = float(hc.iloc[-1]) > float(hh.iloc[-13:-1].max())
+        if daily_break or hourly_break:
+            score += 10.0 if daily_break else 7.0
+            result["BearishStructureBreak"] = "تأیید در Daily" if daily_break else "شکست کوتاه‌مدت در 1H"
+        else:
+            result["BearishStructureBreak"] = "هنوز تأیید نشده"
+            # Do not call it a knife only because structure has not broken yet.
+
+        # Relative strength: 5-session return vs SPY, with a second comparison to 20 sessions.
+        rs5 = rs20 = None
+        if benchmark is not None and not benchmark.empty:
+            bc = benchmark["Close"].astype(float).dropna()
+            joined = pd.concat([close.rename("stock"), bc.rename("benchmark")], axis=1).dropna()
+            if len(joined) >= 21:
+                sr5 = (joined["stock"].iloc[-1]/joined["stock"].iloc[-6]-1)*100
+                br5 = (joined["benchmark"].iloc[-1]/joined["benchmark"].iloc[-6]-1)*100
+                sr20 = (joined["stock"].iloc[-1]/joined["stock"].iloc[-21]-1)*100
+                br20 = (joined["benchmark"].iloc[-1]/joined["benchmark"].iloc[-21]-1)*100
+                rs5, rs20 = float(sr5-br5), float(sr20-br20)
+        if rs5 is not None:
+            if rs5 > 1.0 or (rs5 > -0.5 and rs5 > rs20):
+                score += 10.0
+                result["RelativeStrength"] = f"بهبود (5D نسبت به SPY: {rs5:+.1f}٪)"
+            else:
+                result["RelativeStrength"] = f"ضعیف (5D نسبت به SPY: {rs5:+.1f}٪)"
+                if rs5 < -4:
+                    knife += 10.0
+
+        # Earlyness: favor price near its recent low; penalize entries after a large rebound.
+        low10 = float(low.iloc[-10:].min())
+        rebound = (price/low10-1)*100 if low10 > 0 else 0.0
+        result["ReboundFromLowPct"] = round(rebound, 2)
+        if rebound <= 3:
+            score += 10.0
+        elif rebound <= 6:
+            score += 7.0
+        elif rebound <= 10:
+            score += 3.0
+        else:
+            score -= min(18.0, (rebound-10)*1.5)
+
+        # Strong recent lower lows plus accelerating downside are a warning, not a buy veto.
+        ret5 = (price/float(close.iloc[-6])-1)*100 if float(close.iloc[-6]) > 0 else 0.0
+        ret_prev5 = (float(close.iloc[-6])/float(close.iloc[-11])-1)*100 if float(close.iloc[-11]) > 0 else 0.0
+        if recent_low < prior_low*0.97:
+            knife += 18.0
+        if ret5 < -5 and ret5 < ret_prev5:
+            knife += 15.0
+        if not stabilizing and not pressure_fading:
+            knife += 12.0
+
+        result["EarlyRecoveryScore"] = int(round(max(0, min(100, score))))
+        result["FallingKnifeRisk"] = int(round(max(0, min(100, knife))))
+        if result["FallingKnifeRisk"] >= 45:
+            result["RecoveryStage"] = "ریسک سقوط؛ نیازمند تثبیت"
+        elif result["EarlyRecoveryScore"] >= 55 and (higher_low or daily_break or hourly_break):
+            result["RecoveryStage"] = "بازیابی زودهنگام با شواهد ساختاری"
+        elif stabilizing and (pressure_fading or higher_low):
+            result["RecoveryStage"] = "کف احتمالی در حال شکل‌گیری"
+        else:
+            result["RecoveryStage"] = "فقط زیرنظر؛ تأیید ناکافی"
+        return result
+    except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError, OverflowError):
+        return result
+
 @st.cache_data(ttl=900, show_spinner=False)
 def run_fast_market_scan():
     rows, diagnostic_rows = [], []
-    daily_map = download_batch(TICKERS, "1y", "1d")
+    daily_map = download_batch(list(dict.fromkeys(list(TICKERS) + ["SPY"])), "1y", "1d")
     hourly_map = download_batch(TICKERS, "60d", "1h")
     for ticker in TICKERS:
         frame = daily_map.get(ticker, pd.DataFrame())
@@ -314,18 +522,27 @@ def run_fast_market_scan():
             atr = float(tr.rolling(14).mean().iloc[-1])
             if not np.isfinite(atr) or atr <= 0: atr = price*0.02
             h4 = resample_4h(hourly)
-            qd, qdv = calc_q_line(frame)
-            q4, q4v = calc_q_line(h4)
-            q1, q1v = calc_q_line(hourly)
+            qd_info = q_cloud_analysis(frame)
+            q4_info = q_cloud_analysis(h4)
+            q1_info = q_cloud_analysis(hourly)
+            recovery = early_recovery_metrics(frame, hourly, daily_map.get("SPY", pd.DataFrame()))
+            qd, qdv = qd_info["status"], qd_info["value"]
+            q4, q4v = q4_info["status"], q4_info["value"]
+            q1, q1v = q1_info["status"], q1_info["value"]
             meta = UNIVERSE_META.get(ticker, {})
-            rows.append({"Ticker":ticker,"Company":meta.get("Company",ticker),"Sector":"N/A",
+            rows.append({"Ticker":ticker,"Company":meta.get("Company",ticker),"Industry":meta.get("Industry", "") or "N/A",
                 "MarketCap":meta.get("MarketCap",np.nan),
                 "Price":round(price,2),"Change":round(change,2),"Drop52W":round(drop52,2),"RSI":round(rsi,2),
                 "NearSupport":"Valid" if price <= support*1.10 else "Normal",
                 "Q_Daily":qd,"Q_Daily_Value":qdv,"Q_4H":q4,"Q_4H_Value":q4v,"Q_1H":q1,"Q_1H_Value":q1v,
+                "Q_Daily_Event":qd_info["event"],"Q_4H_Event":q4_info["event"],"Q_1H_Event":q1_info["event"],
+                "Q_Daily_Cloud":f"{qd_info['cloud_color']} {qd_info['cloud_move']}",
+                "Q_4H_Cloud":f"{q4_info['cloud_color']} {q4_info['cloud_move']}",
+                "Q_1H_Cloud":f"{q1_info['cloud_color']} {q1_info['cloud_move']}",
                 "VolRatio":round(vol_ratio,2),"SMA50_Diff":round(sma50_diff,2),"SMA200_Diff":round(sma200_diff,2),
                 "StopLoss":round(price-1.5*atr,2),"Volume":int(volume.iloc[-1]) if np.isfinite(volume.iloc[-1]) else 0,
-                "Score":round(drop20+(50-rsi)+(vol_ratio*3),2)})
+                **recovery,
+                "Score":round(float(recovery["EarlyRecoveryScore"])-0.30*float(recovery["FallingKnifeRisk"]),2)})
             diagnostic_rows.append({"Ticker":ticker,"Status":"OK" if not hourly.empty else "PARTIAL",
                 "Source":"Yahoo Finance batch download",
                 "Details":f"{len(frame)} daily bars; {len(hourly)} hourly bars; {len(h4)} derived 4H bars"})
@@ -353,7 +570,13 @@ with st.expander("🔎 Yahoo connection diagnostics", expanded=df_res.empty):
     st.dataframe(pd.DataFrame(diagnostics), use_container_width=True, hide_index=True)
 
 if not df_res.empty:
-    df_res = df_res.sort_values("Score", ascending=False).head(10)
+    # Discovery ranking favors early recovery evidence and subtracts falling-knife risk.
+    df_res = df_res.sort_values(["Score", "EarlyRecoveryScore"], ascending=[False, False]).head(10)
+    if "Industry" not in df_res.columns:
+        df_res["Industry"] = "N/A"
+    for _idx, _row in df_res.iterrows():
+        if not str(_row.get("Industry", "N/A")).strip() or str(_row.get("Industry", "N/A")).strip().upper() == "N/A":
+            df_res.at[_idx, "Industry"] = lookup_industry(_row["Ticker"])
 fallback = ["NVDA","AMD","INTC","TSLA","AAPL","MSFT"]
 top_tickers = df_res["Ticker"].tolist() if not df_res.empty else fallback.copy()
 while len(top_tickers) < 6:
@@ -375,30 +598,40 @@ def fmt_volume(value):
     if value >= 1e3: return f"{value/1e3:.1f}K"
     return f"{value:,.0f}"
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def lookup_industry(ticker):
+    """Fetch industry label from Yahoo metadata; return N/A rather than inventing one."""
+    try:
+        info = yf.Ticker(str(ticker)).get_info()
+        industry = info.get("industry") if isinstance(info, dict) else None
+        return str(industry).strip() if industry else "N/A"
+    except Exception:
+        return "N/A"
+
 st.caption(f"Universe: {len(TICKERS)} نماد | منبع: {UNIVERSE_SOURCE}")
-st.caption("Q-Line = Kijun-26 (میانه بیشترین High و کمترین Low در ۲۶ کندل همان تایم‌فریم). هر ستون هم مقدار خط و هم وضعیت Close نسبت به خط را نشان می‌دهد؛ 4H از کندل‌های 1H تجمیع می‌شود.")
-st.subheader("📊 Top Alpha Stocks (Multi-TF Q-Line Status: Daily, 4H, 1H)")
+st.caption("رتبه‌بندی فرصت کف: افت قبلی + تضعیف فشار فروش/جذب عرضه + تثبیت و Higher Low + شکست ساختار نزولی + قدرت نسبی بهتر؛ امتیاز Falling-Knife Risk از رتبه کم می‌کند. این امتیاز فقط برای کشف و رتبه‌بندی است و سیگنال BUY نیست.")
+st.caption("Q-Line مطابق Pine Script شما محاسبه می‌شود: Base Line دورهٔ ۲۶ با offset=+26 و ابر با offset=+25. تمرکز هشدار روی Q-Line خارج از ابر و به‌ویژه زیر ابر است؛ داخل ابر هشدار مهمی ندارد. بالای ابر فقط وضعیت جداگانه است و به‌تنهایی سیگنال منفی نیست. بازگشت به ابر هشدار خروج را پاک می‌کند. 4H از کندل‌های 1H تجمیع می‌شود.")
+st.subheader("📊 Top Alpha Stocks — Early Recovery Ranking")
 rows_html = ""
 if not df_res.empty:
     for rank, row in enumerate(df_res.reset_index(drop=True).to_dict("records"), start=1):
         chg = row["Change"]
         chg_color = "#f87171" if chg < 0 else "#4ade80"
-        def q_color(value):
-            return "#4ade80" if value == "Above" else "#f87171" if value == "Below" else "#fbbf24"
         s50, s200 = row["SMA50_Diff"], row["SMA200_Diff"]
         cells = [
             f"<td style='color:#94a3b8'>{rank}</td>",
             f"<td><b style='color:#38bdf8'>{row['Ticker']}</b></td>",
             f"<td style='text-align:left;color:#f1f5f9'>{row['Company']}</td>",
+            f"<td style='text-align:left;color:#c4b5fd'>{row.get('Industry', 'N/A')}</td>",
             f"<td style='color:#38bdf8'>{fmt_cap(row['MarketCap'])}</td>",
             f"<td style='color:#fff'>${row['Price']:.2f}</td>",
             f"<td style='color:{chg_color}'>{chg:+.2f}%</td>",
             f"<td style='color:#fbbf24'>-{row['Drop52W']:.2f}%</td>",
             f"<td style='color:#38bdf8'>{row['RSI']:.2f}</td>",
+            f"<td style='color:#22c55e'>{row.get('EarlyRecoveryScore', 0)}</td>",
+            f"<td style='color:{'#ef4444' if row.get('FallingKnifeRisk', 50) >= 45 else '#fbbf24'}'>{row.get('FallingKnifeRisk', 50)}</td>",
+            f"<td>{row.get('RecoveryStage', 'N/A')}</td>",
             f"<td style='color:#4ade80'>{row['NearSupport']}</td>",
-            f"<td title='Q={fmt_q(row['Q_Daily_Value'])}' style='color:{q_color(row['Q_Daily'])}'>{fmt_q(row['Q_Daily_Value'])} · {row['Q_Daily']}</td>",
-            f"<td title='Q={fmt_q(row['Q_4H_Value'])}' style='color:{q_color(row['Q_4H'])}'>{fmt_q(row['Q_4H_Value'])} · {row['Q_4H']}</td>",
-            f"<td title='Q={fmt_q(row['Q_1H_Value'])}' style='color:{q_color(row['Q_1H'])}'>{fmt_q(row['Q_1H_Value'])} · {row['Q_1H']}</td>",
             f"<td style='color:#cbd5e1'>{fmt_volume(row['Volume'])}</td>",
             f"<td style='color:{'#38bdf8' if row['VolRatio'] >= 1.2 else '#cbd5e1'}'>{row['VolRatio']:.2f}x</td>",
             f"<td style='color:{'#f87171' if s50 < 0 else '#4ade80'}'>{s50:+.2f}%</td>",
@@ -415,15 +648,24 @@ th{background:#1e222d;color:#f8fafc;font-size:12px;font-weight:bold;padding:8px 
 td{padding:8px 2px;text-align:center;border-bottom:1px solid #2a2e39;font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 tr:hover{background:#1e222d}
 </style></head><body><table><thead><tr>
-<th style='width:2.5%'>No</th><th style='width:5.5%'>Ticker</th><th style='width:11.5%;text-align:left'>Company</th>
+<th style='width:2.5%'>No</th><th style='width:5.5%'>Ticker</th><th style='width:10%;text-align:left'>Company</th><th style='width:11%;text-align:left'>Industry</th>
 <th style='width:6.5%'>Cap</th><th style='width:5.5%'>Price</th><th style='width:5.5%'>Chg %</th>
-<th style='width:6.5%'>52W Drop</th><th style='width:4.5%'>RSI</th><th style='width:6%'>Support</th>
-<th style='width:7.5%'>Q-Line D</th><th style='width:7.5%'>Q-Line 4H</th><th style='width:7.5%'>Q-Line 1H</th>
+<th style='width:6.5%'>52W Drop</th><th style='width:4.5%'>RSI</th><th style='width:6%'>Early Score</th><th style='width:6%'>Knife Risk</th><th style='width:6%'>Recovery Stage</th><th style='width:6%'>Support</th>
 <th style='width:6%'>Volume</th><th style='width:5%'>RVol</th><th style='width:6%'>SMA50</th>
 <th style='width:6%'>SMA200</th><th style='width:6.5%'>StopLoss</th>
 </tr></thead><tbody>
 """ + rows_html + "</tbody></table></body></html>"
 components.html(table_html, height=520, scrolling=True)
+
+with st.expander("🚨 Q-Line / Cloud Alerts — جزئیات هشدار", expanded=True):
+    if not df_res.empty:
+        alert_cols = ["Ticker", "Price", "Q_Daily", "Q_Daily_Value", "Q_Daily_Cloud", "Q_Daily_Event",
+                      "Q_4H", "Q_4H_Value", "Q_4H_Cloud", "Q_4H_Event",
+                      "Q_1H", "Q_1H_Value", "Q_1H_Cloud", "Q_1H_Event"]
+        alert_view = df_res[[c for c in alert_cols if c in df_res.columns]].copy()
+        st.dataframe(alert_view, use_container_width=True, hide_index=True)
+    else:
+        st.info("برای هشدار Q-Line دادهٔ معتبر در دسترس نیست.")
 
 st.markdown("---")
 st.subheader("🖥️ 6-Chart Live TradingView Grid (Auto-Synced with Top Table)")
