@@ -1,704 +1,930 @@
+
 import streamlit as st
-import os
-from streamlit.errors import StreamlitSecretNotFoundError
-import pandas as pd
-import yfinance as yf
-import numpy as np
 import streamlit.components.v1 as components
-import requests
-import time
-from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
-# Must be the first Streamlit command.
-st.set_page_config(layout="wide", page_title="Alpha Market Scanner & Multi-TF Monitor")
+# ------------------ تنظیمات صفحه ------------------
+st.set_page_config(
+    page_title="Semiconductor Day Trader",
+    page_icon="⚡",
+    layout="wide"
+)
 
-# Support both Streamlit secrets.toml and environments without a secrets file.
-try:
-    APP_PASSWORD = st.secrets.get("APP_PASSWORD", os.environ.get("APP_PASSWORD", "Arash1234"))
-except StreamlitSecretNotFoundError:
-    APP_PASSWORD = os.environ.get("APP_PASSWORD", "Arash1234")
-
+# ------------------ ورود با رمز ------------------
 def check_password():
-    def password_entered():
-        st.session_state["password_correct"] = (
-            st.session_state.get("password", "") == APP_PASSWORD
-        )
-        st.session_state.pop("password", None)
-
-    if st.session_state.get("password_correct") is True:
+    if st.session_state.get("authenticated", False):
         return True
-    st.text_input("لطفاً رمز عبور را وارد کنید:", type="password",
-                  on_change=password_entered, key="password")
-    if st.session_state.get("password_correct") is False:
-        st.error("😕 رمز عبور اشتباه است")
+
+    st.title("🔐 ورود به داشبورد")
+    password = st.text_input("رمز عبور", type="password")
+
+    if st.button("ورود"):
+        if password == "Arash1234":
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("رمز عبور اشتباه است.")
+
     return False
+
 
 if not check_password():
     st.stop()
 
-st.markdown("""
-<style>
-.stApp,[data-testid="stHeader"],[data-testid="stSidebar"]{background:#131722!important;color:#d1d4dc!important}
-.block-container{padding:.2rem .5rem 0!important}
-h1{font-size:32px!important;font-weight:bold!important;color:#f8fafc!important;margin-bottom:0!important}
-h2,h3{font-size:22px!important;font-weight:bold!important;color:#e2e8f0!important;margin:5px 0!important}
-div[data-testid="stTextInput"]>label,div[data-testid="stWidgetLabel"] p{font-size:16px!important;font-weight:bold!important;color:#f8fafc!important}
-hr{margin:5px 0!important;border-color:#2a2e39!important}
-</style>
-""", unsafe_allow_html=True)
-st.title("🎯 Alpha Market Scanner & Multi-TF Q-Line Monitor")
-
-FALLBACK_TICKERS = """
-AAPL MSFT NVDA AMZN GOOGL GOOG META BRK-B AVGO LLY JPM WMT XOM V MA ORCL COST NFLX JNJ HD PG ABBV BAC KO PLTR CVX CRM AMD TMUS MRK CSCO ACN GE IBM WFC PM LIN ABT MCD TMO NOW ISRG CAT GS RTX AXP DIS QCOM INTU AMAT TXN PEP VZ MS UNH UBER BKNG LOW SPGI BLK SCHW C T DHR ADI SYK ANET MU LRCX KLAC PANW ADP BSX TJX CHTR PGR COP DE CB MMC CME ICE SO AMGN ETN MO REGN WM NEE HON MDT UPS CI CVS BMY ELV PNC USB AON EQIX APH SNPS CDNS CRWD MAR PLD SHW MCK CL CMG ORLY EOG FDX ITW GD EMR NOC NSC FCX NUE CMI PH MSI ROP TT CARR JCI FISV FICO RSG AEP DUK SRE EXC XEL OKE SLB ECL APD CTVA AIG MET PRU ALL AFL TRV KKR BX APO TROW COIN SHOP ARM SNOW DDOG ZS MDB NET TEAM VRTX GILD BIIB ZTS IDXX DXCM EW HCA HUM CEG VST PWR URI FAST ODFL LULU NKE SBUX YUM ROST DELL HPQ HPE STX WDC GLW TEL FLEX AME IR PHM LEN DHI NVR CCL RCL DAL UAL LUV ABNB DASH MELI TTD RBLX EA TTWO WDAY PAYX PAYC RMD CPRT CSGP VRSK ACGL AJG BRO ERIE WRB WTW FDS MCO MSCI NDAQ CBOE CINF FNF RJF KEY RF HBAN CFG MTB FITB TFC COF SYF DFS ARES OWL KNSL FANG MPC PSX VLO OXY DVN HAL BKR CTRA WMB KMI FTV CNP ETR PPL DTE ED AES GIS K DPZ KDP MDLZ HSY CLX KMB KR WBA TGT DG DLTR BBY TSCO GPC AZO AN BWA GM TM HMC NEM GOLD AEM WPM KGC RGLD SCCO AA CENX CCK BALL PKG IP AVY IFF LYB DOW DD NTR MOS CF FMC ADM BG TSN HRL CPB MKC SJM CHD ELF ULTA TPR RL PVH DECK CROX GPS ANF AEO URBN BBWI SIG COTY HIMS DOCS TEM CNC MOH INSP UHS THC HLT H HST VICI WYNN LVS MGM CZR PENN DKNG CHDN FLUT EXPE RKT RDFN ZG OPEN COMP INVH AMH EQR AVB ESS MAA CPT UDR FRT REG KIM BXP VNO SLG ARE PSA CUBE EXR IRM O SPG WPC NNN ELS SUI EQT SWN AR APA PR RRC CNX PAA ET MPLX EPD ENPH FSLR NRG DLR AMT CCI SBAC BEN IVZ AMP STT BK NTRS FIS GPN FI FOUR BILL SQ HOOD SOFI AFRM UPST TOST TWLO DOCU ZM OKTA ESTC AKAM FFIV JNPR CDW CIEN LITE COHR KEYS JBL SANM QRVO SWKS MCHP NXPI ON STM MPWR MRVL INTC TSM ENTG TER ACLS AMKR WOLF ALGM LSCC SYNA OLED MTSI CRUS RMBS IPGP RUN PLUG QS CHPT EVGO LCID RIVN NIO XPEV LI RACE CVNA KMX PAG LAD LKQ WAB CNI CP UNP CSX XPO SAIA JBHT CHRW EXPD LSTR WCN CWST GFL VRT FIX GEV LMT HII LHX TDG HEI TXT JOBY ACHR SOUN IONQ RGTI QBTS OKLO SMR CCJ PCG EIX ED ES WEC CMS NI EVRG IDA POR AWK XYL WAT A O WELL CCI TOWER TROW FNF FITB KEY CFG RF MTB HBAN CMA ZION WAL EWBC FHN SNV UMBF ONB WTFC PB CACC MORN RYAN CACI LDOS SAIC J BAH PSN KBR ACM FLR PCTY PAYC WEX BR
-""".split()
-
-def get_dynamic_universe():
-    """Fetch a large US stock universe from Yahoo Screener, market-cap filtered."""
-    screen_error = "unknown error"
-    metadata = {}
-    try:
-        from yfinance import EquityQuery
-        query = EquityQuery("and", [
-            EquityQuery("eq", ["region", "us"]),
-            # EquityQuery is-in expects each allowed value as a separate operand.
-            EquityQuery("is-in", ["exchange", "NMS", "NYQ", "ASE"]),
-            EquityQuery("gte", ["intradaymarketcap", 15_000_000_000]),
-            EquityQuery("lte", ["intradaymarketcap", 6_000_000_000_000]),
-            EquityQuery("gte", ["intradayprice", 5]),
-        ])
-        quotes = []
-        # Yahoo Screener returns at most 250 per page. Request another page for 300+.
-        for offset, size in ((0, 250), (250, 100), (350, 100)):
-            result = yf.screen(query, offset=offset, size=size,
-                               sortField="intradaymarketcap", sortAsc=False)
-            if isinstance(result, dict):
-                quotes.extend(result.get("quotes", []))
-        symbols = []
-        for item in quotes:
-            if not isinstance(item, dict):
-                continue
-            symbol = str(item.get("symbol", "")).strip().upper()
-            if not symbol:
-                continue
-            cap = item.get("intradaymarketcap", item.get("marketCap", np.nan))
-            try:
-                cap = float(cap)
-            except (TypeError, ValueError):
-                cap = np.nan
-            # Keep only entries with a valid market cap in the requested range.
-            if not np.isfinite(cap) or not (15_000_000_000 <= cap <= 6_000_000_000_000):
-                continue
-            if symbol not in metadata:
-                symbols.append(symbol)
-                metadata[symbol] = {
-                    "MarketCap": cap,
-                    "Company": item.get("longName") or item.get("shortName") or symbol,
-                    "Industry": item.get("industry") or item.get("industryName") or "",
-                }
-        if len(symbols) >= 250:
-            selected_symbols = symbols[:300]
-            selected_metadata = {symbol: metadata[symbol] for symbol in selected_symbols}
-            return selected_symbols, selected_metadata, "Yahoo Screener ($15B–$6T; market-cap verified)"
-        screen_error = f"Screener returned only {len(symbols)} verified symbols"
-    except Exception as exc:
-        screen_error = f"{type(exc).__name__}: {exc}"
-    # This fallback is intentionally marked as unverified: never claim its market caps are live-verified.
-    symbols = list(dict.fromkeys(FALLBACK_TICKERS))[:300]
-    metadata = {symbol: {"MarketCap": np.nan, "Company": symbol, "Industry": ""} for symbol in symbols}
-    return symbols, metadata, f"Fallback list ({len(symbols)} symbols; $15B cap not verified): {screen_error}"
-
-TICKERS, UNIVERSE_META, UNIVERSE_SOURCE = get_dynamic_universe()
-OHLCV = ["Open","High","Low","Close","Volume"]
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "application/json,text/plain,*/*",
-    "Accept-Language": "en-US,en;q=0.9",
+# تم واقعی روشن/تاریک؛ انتخاب در session حفظ می‌شود و کل رابط هماهنگ تغییر می‌کند.
+if "dashboard_theme" not in st.session_state:
+    st.session_state["dashboard_theme"] = "تاریک"
+st.sidebar.header("🎨 ظاهر برنامه")
+st.sidebar.radio("حالت نمایش", ["تاریک", "روشن"], key="dashboard_theme", horizontal=True)
+IS_DARK = st.session_state["dashboard_theme"] == "تاریک"
+THEME = {
+    "bg": "#0b1220" if IS_DARK else "#f4f7fb",
+    "panel": "#111c2e" if IS_DARK else "#ffffff",
+    "panel2": "#172338" if IS_DARK else "#edf2f8",
+    "text": "#e8eef7" if IS_DARK else "#172033",
+    "muted": "#a9b7ca" if IS_DARK else "#596579",
+    "border": "#2b3b52" if IS_DARK else "#d7dfeb",
+    "input": "#152238" if IS_DARK else "#ffffff",
+    "tv": "dark" if IS_DARK else "light",
 }
+st.markdown(f"""<style>
+:root {{
+  color-scheme: {'dark' if IS_DARK else 'light'};
+  --text-color: {THEME['text']};
+  --background-color: {THEME['bg']};
+  --secondary-background-color: {THEME['panel']};
+  --primary-color: {'#66bbff' if IS_DARK else '#1457b8'};
+}}
+.stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {{
+  background: {THEME['bg']} !important;
+  color: {THEME['text']} !important;
+}}
+[data-testid="stHeader"] {{ background: {THEME['bg']} !important; }}
+[data-testid="stSidebar"] {{ background: {THEME['panel']} !important; }}
+[data-testid="stSidebar"] * {{ color: {THEME['text']}; }}
+/* Force readable theme-aware text across Streamlit's native components. */
+.stApp p, .stApp li, .stApp label, .stApp [data-testid="stMarkdownContainer"],
+.stApp [data-testid="stText"], .stApp [data-testid="stCaptionContainer"],
+.stApp [data-testid="stWidgetLabel"], .stApp [data-testid="stMarkdownContainer"] p,
+.stApp [data-testid="stMarkdownContainer"] li,
+.stApp [data-testid="stMetricLabel"], .stApp [data-testid="stMetricValue"],
+.stApp [data-testid="stMetricDelta"] {{ color: {THEME['text']}; }}
+.stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
+  color: {THEME['text']} !important;
+}}
+.stApp [data-testid="stCaptionContainer"], .stApp small {{ color: {THEME['muted']} !important; }}
+[data-testid="stMetric"] {{ background: {THEME['panel']} !important; border: 1px solid {THEME['border']}; border-radius: 10px; padding: 10px; }}
+[data-testid="stMetricLabel"] p, [data-testid="stMetricValue"] div {{ color: {THEME['text']} !important; }}
+[data-testid="stMetricDelta"] svg {{ fill: currentColor; }}
+[data-testid="stExpander"] {{ background: {THEME['panel']} !important; border: 1px solid {THEME['border']}; border-radius: 9px; }}
+[data-testid="stExpander"] summary, [data-testid="stExpander"] summary span {{ color: {THEME['text']} !important; }}
+[data-testid="stDataFrame"], [data-testid="stTable"] {{ background: {THEME['panel']} !important; color: {THEME['text']} !important; }}
+.stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"],
+.stTextArea textarea {{ background: {THEME['input']} !important; color: {THEME['text']} !important; }}
+[data-baseweb="select"] *, [data-baseweb="input"] *, [data-baseweb="checkbox"] + label {{ color: {THEME['text']} !important; }}
+hr {{ border-color: {THEME['border']} !important; }}
+</style>""", unsafe_allow_html=True)
 
-def normalize_history(frame):
-    """Normalize yfinance MultiIndex and ordinary OHLCV data."""
-    if frame is None or frame.empty:
-        return pd.DataFrame()
-    frame = frame.copy()
-    if isinstance(frame.columns, pd.MultiIndex):
-        flat = []
-        for column in frame.columns:
-            parts = [str(x) for x in column]
-            found = next((x for x in parts if x in OHLCV + ["Adj Close"]), None)
-            flat.append(found or parts[0])
-        frame.columns = flat
-    frame.columns = [str(x) for x in frame.columns]
-    frame = frame.loc[:, ~frame.columns.duplicated()]
-    if not all(c in frame.columns for c in OHLCV):
-        return pd.DataFrame()
-    frame = frame[OHLCV]
-    for c in OHLCV:
-        frame[c] = pd.to_numeric(frame[c], errors="coerce")
-    frame = frame.dropna(subset=["Open","High","Low","Close"])
-    return frame.loc[~frame.index.duplicated(keep="last")].sort_index()
+st_autorefresh(interval=15000, key="market_refresh")
 
-def fetch_direct_yahoo(ticker):
-    errors = []
-    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
-        url = f"https://{host}/v8/finance/chart/{ticker}"
+st.title("⚡ داشبورد معاملات روزانه نیمه‌هادی‌ها")
+st.caption("سیگنال ۵ دقیقه‌ای با تأیید ۱۵ دقیقه‌ای؛ تصمیم ورود از مدیریت موقعیت جداست. داده Yahoo Finance ممکن است تأخیری باشد؛ این داشبورد سفارش واقعی ثبت نمی‌کند.")
+
+# مدیریت موقعیت اختیاری؛ برای خروج/نگهداری باید قیمت ورود واقعی وارد شود.
+st.sidebar.header("مدیریت موقعیت فعلی")
+st.sidebar.caption("اگر SOXL یا SOXS داری، اطلاعات ورود را وارد کن تا پیشنهاد نگهداری/خروج محاسبه شود.")
+position_inputs = {}
+for _sym in ("SOXL", "SOXS"):
+    with st.sidebar.expander(f"موقعیت {_sym}", expanded=False):
+        _held = st.checkbox(f"در حال حاضر {_sym} دارم", key=f"held_{_sym}")
+        _entry = st.number_input(f"قیمت ورود {_sym} ($)", min_value=0.0, value=0.0, step=0.05, key=f"entry_{_sym}")
+        _shares = st.number_input(f"تعداد سهم {_sym}", min_value=0, value=0, step=1, key=f"shares_{_sym}")
+        position_inputs[_sym] = {"held": _held, "entry": float(_entry), "shares": int(_shares)}
+
+SYMBOLS = [
+    "SOXL", "SOXS", "SOXX", "QQQ", "SPY",
+    "NVDA", "AVGO", "AMD", "QCOM", "AMAT",
+    "MU", "LRCX", "KLAC", "MRVL", "INTC"
+]
+
+SEMIS = [
+    "NVDA", "AVGO", "AMD", "QCOM", "AMAT",
+    "MU", "LRCX", "KLAC", "MRVL", "INTC"
+]
+
+# ------------------ دریافت داده ------------------
+@st.cache_data(ttl=15, show_spinner=False)
+def download_data():
+    raw = yf.download(
+        tickers=" ".join(SYMBOLS),
+        period="5d",
+        interval="5m",
+        group_by="ticker",
+        auto_adjust=False,
+        progress=False,
+        threads=True
+    )
+
+    result = {}
+
+    if raw is None or raw.empty:
+        return result
+
+    for symbol in SYMBOLS:
         try:
-            response = requests.get(
-                url, params={"range":"1y","interval":"1d","events":"div,splits"},
-                headers=HEADERS, timeout=(5, 12)
-            )
-            if response.status_code != 200:
-                errors.append(f"{host}: HTTP {response.status_code}: {response.text[:100]!r}")
+            if not isinstance(raw.columns, pd.MultiIndex):
                 continue
-            payload = response.json()
-            chart = payload.get("chart", {})
-            if chart.get("error"):
-                errors.append(f"{host}: Yahoo error {chart['error']}")
-                continue
-            result = (chart.get("result") or [None])[0]
-            if not result:
-                errors.append(f"{host}: empty result")
-                continue
-            timestamps = result.get("timestamp") or []
-            quotes = result.get("indicators", {}).get("quote") or []
-            if not timestamps or not quotes:
-                errors.append(f"{host}: no OHLCV data")
-                continue
-            quote = quotes[0]
-            dates = pd.to_datetime(timestamps, unit="s", utc=True).tz_convert(None)
-            raw = pd.DataFrame({c: quote.get(c.lower()) for c in OHLCV}, index=dates)
-            raw.index.name = "Date"
-            clean = normalize_history(raw)
-            if not clean.empty:
-                return clean, f"Yahoo chart API ({host})", None
-            errors.append(f"{host}: OHLCV data unusable")
-        except requests.exceptions.SSLError as exc:
-            errors.append(f"{host}: SSL error: {exc}")
-        except requests.exceptions.Timeout:
-            errors.append(f"{host}: timeout")
-        except requests.exceptions.RequestException as exc:
-            errors.append(f"{host}: network error {type(exc).__name__}: {exc}")
-        except (ValueError, TypeError, KeyError) as exc:
-            errors.append(f"{host}: invalid response {type(exc).__name__}: {exc}")
-        time.sleep(0.25)
-    return pd.DataFrame(), None, " | ".join(errors)
 
-def fetch_history(ticker):
-    direct, source, direct_error = fetch_direct_yahoo(ticker)
-    if not direct.empty:
-        return direct, source, None
-    try:
-        data = yf.download(ticker, period="1y", interval="1d", progress=False,
-                           threads=False, auto_adjust=False, timeout=15)
-        data = normalize_history(data)
-        if not data.empty:
-            return data, "yfinance fallback", None
-        yf_error = "yfinance returned empty data"
-    except Exception as exc:
-        yf_error = f"{type(exc).__name__}: {exc}"
-    return pd.DataFrame(), None, f"Direct API: {direct_error} | yfinance: {yf_error}"
-
-def q_cloud_analysis(frame):
-    """Analyze the *visually aligned* Q-Line and Ichimoku cloud from the user's Pine script.
-
-    Quality Line = Kijun-26 plotted with offset +26, so the value visible at the
-    latest chart bar is BaseLine[26] (iloc[-27]). The cloud is plotted with
-    offset displacement-1 = +25, so its value visible at the latest bar is
-    SpanA[25]/SpanB[25] (iloc[-26]). This alignment avoids a 25/26-bar mismatch.
-    Returns a dict of position, Q-Line value, cloud bounds, cloud color/direction,
-    distance, and a concise event/alert.
-    """
-    empty = {"status":"N/A", "value":np.nan, "cloud_low":np.nan,
-             "cloud_high":np.nan, "cloud_color":"N/A", "cloud_move":"N/A",
-             "distance_pct":np.nan, "event":"Insufficient data"}
-    if frame is None or frame.empty or len(frame) < 78:
-        return empty.copy()
-    try:
-        high = pd.to_numeric(frame["High"], errors="coerce")
-        low = pd.to_numeric(frame["Low"], errors="coerce")
-        close = pd.to_numeric(frame["Close"], errors="coerce")
-        def donchian(length):
-            return (high.rolling(length, min_periods=length).max() +
-                    low.rolling(length, min_periods=length).min()) / 2
-        conversion = donchian(9)
-        baseline = donchian(26)
-        span_a = (conversion + baseline) / 2
-        span_b = donchian(52)
-
-        # Pine offsets are display shifts, not shifts to the underlying series.
-        q_value = float(baseline.iloc[-27])       # plot(baseLine, offset=+26)
-        span_a_now = float(span_a.iloc[-26])      # cloud offset=+25
-        span_b_now = float(span_b.iloc[-26])
-        span_a_prev = float(span_a.iloc[-27])
-        span_b_prev = float(span_b.iloc[-27])
-        last_close = float(close.iloc[-1])
-        values = [q_value, span_a_now, span_b_now, span_a_prev, span_b_prev, last_close]
-        if not all(np.isfinite(v) for v in values):
-            return empty.copy()
-
-        cloud_low, cloud_high = min(span_a_now, span_b_now), max(span_a_now, span_b_now)
-        if q_value < cloud_low:
-            status = "Below Cloud"
-        elif q_value > cloud_high:
-            status = "Above Cloud"
-        else:
-            status = "Inside Cloud"
-        cloud_color = "Green" if span_a_now > span_b_now else "Red"
-        mid_now = (span_a_now + span_b_now) / 2
-        mid_prev = (span_a_prev + span_b_prev) / 2
-        cloud_delta_pct = (mid_now - mid_prev) / abs(mid_prev) * 100 if mid_prev else 0.0
-        cloud_move = "Up" if cloud_delta_pct > 0.05 else "Down" if cloud_delta_pct < -0.05 else "Flat"
-        gap = (cloud_low - q_value) if q_value < cloud_low else (q_value - cloud_high) if q_value > cloud_high else 0.0
-        distance_pct = gap / abs(q_value) * 100 if q_value else np.nan
-
-        # Events use the prior aligned bar, to distinguish first contact/entry from a static state.
-        q_prev = float(baseline.iloc[-28]) if len(baseline) >= 78 and pd.notna(baseline.iloc[-28]) else np.nan
-        lo_prev = min(float(span_a.iloc[-27]), float(span_b.iloc[-27]))
-        hi_prev = max(float(span_a.iloc[-27]), float(span_b.iloc[-27]))
-        if q_value < cloud_low:
-            # Primary condition requested by the user: Q-Line outside and below the cloud.
-            if np.isfinite(q_prev) and q_prev >= lo_prev:
-                event = "OUTSIDE BELOW — Q-Line exited cloud"
-            elif distance_pct <= 0.5:
-                event = "OUTSIDE BELOW — near cloud"
+            if symbol in raw.columns.get_level_values(0):
+                df = raw[symbol].copy()
+            elif symbol in raw.columns.get_level_values(1):
+                df = raw.xs(symbol, axis=1, level=1).copy()
             else:
-                event = "OUTSIDE BELOW — Q-Line alert"
-        elif q_value > cloud_high:
-            # Track this as a separate position, not a bearish alert by itself.
-            if np.isfinite(q_prev) and q_prev <= hi_prev:
-                event = "OUTSIDE ABOVE — Q-Line exited cloud (separate status)"
-            elif distance_pct <= 0.5:
-                event = "OUTSIDE ABOVE — near cloud"
-            else:
-                event = "OUTSIDE ABOVE — separate status; not bearish by itself"
-        else:
-            if np.isfinite(q_prev) and (q_prev < lo_prev or q_prev > hi_prev):
-                event = "Q-Line re-entered cloud — outside alert cleared"
-            else:
-                # User said the inside-cloud state is not important; keep it neutral.
-                event = "Inside cloud — no outside alert"
-        if cloud_color == "Red" and cloud_move == "Up":
-            event += " | Red cloud rising"
-        return {"status":status, "value":q_value, "cloud_low":cloud_low,
-                "cloud_high":cloud_high, "cloud_color":cloud_color,
-                "cloud_move":cloud_move, "distance_pct":distance_pct, "event":event}
-    except (KeyError, TypeError, ValueError, IndexError, OverflowError):
-        return empty.copy()
+                continue
+            # برخی نسخه‌های yfinance ترتیب سطوح ستون‌ها را متفاوت برمی‌گردانند.
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [c[-1] if str(c[-1]).title() in {"Open", "High", "Low", "Close", "Volume"} else c[0] for c in df.columns]
 
+            df.columns = [str(c).title() for c in df.columns]
+            required = ["Open", "High", "Low", "Close", "Volume"]
 
-def calc_q_line(frame):
-    """Backward-compatible (Q-Line position vs aligned cloud, Q-Line value)."""
-    result = q_cloud_analysis(frame)
-    return result["status"], result["value"]
+            if not all(c in df.columns for c in required):
+                continue
 
-def calc_q_status(frame):
-    # Backward-compatible status-only helper.
-    return calc_q_line(frame)[0]
+            df = df[required].apply(pd.to_numeric, errors="coerce")
+            df = df.dropna(subset=["Open", "High", "Low", "Close"])
+            df = df[~df.index.duplicated(keep="last")].sort_index()
 
+            if len(df) >= 60:
+                result[symbol] = df
 
-def fmt_q(value):
-    return f"${float(value):.2f}" if pd.notna(value) and np.isfinite(float(value)) else "N/A"
-
-
-def extract_ticker_frame(batch, ticker):
-    """Extract a single ticker from yfinance batch MultiIndex data."""
-    if batch is None or batch.empty:
-        return pd.DataFrame()
-    if isinstance(batch.columns, pd.MultiIndex):
-        for level in range(batch.columns.nlevels):
-            if ticker in batch.columns.get_level_values(level):
-                try:
-                    return normalize_history(batch.xs(ticker, axis=1, level=level, drop_level=True))
-                except Exception:
-                    continue
-    return normalize_history(batch)
-
-
-def download_batch(symbols, period, interval):
-    """Batch downloads in moderate chunks instead of one HTTP request per symbol."""
-    output = {}
-    for pos in range(0, len(symbols), 40):
-        chunk = symbols[pos:pos + 40]
-        try:
-            raw = yf.download(chunk, period=period, interval=interval, group_by="ticker",
-                              auto_adjust=False, progress=False, threads=True, timeout=25)
         except Exception:
-            raw = pd.DataFrame()
-        for ticker in chunk:
-            output[ticker] = extract_ticker_frame(raw, ticker)
-    return output
-
-
-def resample_4h(frame):
-    """Aggregate real hourly OHLCV bars into 4-hour bars."""
-    if frame is None or frame.empty:
-        return pd.DataFrame()
-    try:
-        out = frame.sort_index().resample("4h", origin="start_day", offset="30min", label="left", closed="left").agg({
-            "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"
-        })
-        return out.dropna(subset=["Open", "High", "Low", "Close"])
-    except Exception:
-        return pd.DataFrame()
-
-def early_recovery_metrics(frame, hourly, benchmark=None):
-    """Rank potential early bottoms using observable price/volume evidence only.
-
-    This is a discovery/ranking score, not a BUY signal. Missing evidence earns
-    no bonus; the existing Q-Line display and other app behavior remain separate.
-    """
-    result = {
-        "EarlyRecoveryScore": 0, "FallingKnifeRisk": 50,
-        "SellingPressure": "نامشخص", "Stabilization": "نامشخص",
-        "HigherLow": "نامشخص", "BearishStructureBreak": "نامشخص",
-        "RelativeStrength": "نامشخص", "ReboundFromLowPct": np.nan,
-        "RecoveryStage": "شواهد ناکافی"
-    }
-    try:
-        close = frame["Close"].astype(float).dropna()
-        high = frame["High"].astype(float).reindex(close.index)
-        low = frame["Low"].astype(float).reindex(close.index)
-        volume = frame["Volume"].fillna(0).astype(float).reindex(close.index)
-        if len(close) < 30 or close.iloc[-1] <= 0:
-            return result
-        price = float(close.iloc[-1])
-        score = 0.0
-        knife = 0.0
-
-        # 1) Meaningful prior decline: discovery context, not a reason by itself to buy.
-        peak60 = float(high.iloc[-60:].max())
-        drop60 = max(0.0, (peak60-price)/peak60*100) if peak60 > 0 else 0.0
-        score += min(20.0, drop60 * 0.65) if drop60 >= 8 else 0.0
-
-        # 2) Selling pressure: are recent down-day volumes fading vs earlier down days?
-        change = close.diff()
-        down_mask = change < 0
-        recent_down_vol = volume.iloc[-5:][down_mask.iloc[-5:]]
-        prior_down_vol = volume.iloc[-25:-5][down_mask.iloc[-25:-5]]
-        pressure_fading = False
-        if len(recent_down_vol) >= 2 and len(prior_down_vol) >= 3 and float(prior_down_vol.mean()) > 0:
-            ratio = float(recent_down_vol.mean()) / float(prior_down_vol.mean())
-            pressure_fading = ratio < 0.85
-            if pressure_fading:
-                score += 18.0 if ratio < 0.65 else 12.0
-                result["SellingPressure"] = f"فشار فروش ضعیف‌تر ({ratio:.2f}x)"
-            else:
-                result["SellingPressure"] = f"هنوز قوی ({ratio:.2f}x)"
-        elif len(recent_down_vol) < 2:
-            # Fewer recent red days is mildly constructive, but not proof of absorption.
-            if int(down_mask.iloc[-5:].sum()) <= 2:
-                score += 5.0
-                result["SellingPressure"] = "روزهای نزولی کمتر"
-
-        # Absorption clue: unusually active session that closes in the upper half of its range.
-        last_range = max(float(high.iloc[-1]-low.iloc[-1]), price*0.001)
-        close_location = (price-float(low.iloc[-1]))/last_range
-        base_vol = float(volume.iloc[-21:-1].median()) if len(volume) >= 21 else 0.0
-        if base_vol > 0 and float(volume.iloc[-1]) >= 1.25*base_vol and close_location >= 0.65:
-            score += 8.0
-
-        # 3) Stabilization and higher low: compare two completed 5-session windows.
-        recent_low = float(low.iloc[-5:].min())
-        prior_low = float(low.iloc[-10:-5].min())
-        stabilizing = recent_low >= prior_low * 0.985
-        if stabilizing:
-            score += 10.0
-            result["Stabilization"] = "تثبیت نسبی"
-        else:
-            result["Stabilization"] = "کف پایین‌تر"
-            knife += 18.0
-        higher_low = recent_low > prior_low * 1.005
-        if higher_low:
-            score += 12.0
-            result["HigherLow"] = "بله"
-        else:
-            result["HigherLow"] = "خیر/تأییدنشده"
-
-        # A break is only counted when the latest close clears a short-term prior swing high.
-        prior_swing_high = float(high.iloc[-6:-1].max())
-        daily_break = price > prior_swing_high
-        hourly_break = False
-        if hourly is not None and not hourly.empty and len(hourly) >= 25:
-            hc = hourly["Close"].astype(float).dropna()
-            hh = hourly["High"].astype(float).reindex(hc.index)
-            hourly_break = float(hc.iloc[-1]) > float(hh.iloc[-13:-1].max())
-        if daily_break or hourly_break:
-            score += 10.0 if daily_break else 7.0
-            result["BearishStructureBreak"] = "تأیید در Daily" if daily_break else "شکست کوتاه‌مدت در 1H"
-        else:
-            result["BearishStructureBreak"] = "هنوز تأیید نشده"
-            # Do not call it a knife only because structure has not broken yet.
-
-        # Relative strength: 5-session return vs SPY, with a second comparison to 20 sessions.
-        rs5 = rs20 = None
-        if benchmark is not None and not benchmark.empty:
-            bc = benchmark["Close"].astype(float).dropna()
-            joined = pd.concat([close.rename("stock"), bc.rename("benchmark")], axis=1).dropna()
-            if len(joined) >= 21:
-                sr5 = (joined["stock"].iloc[-1]/joined["stock"].iloc[-6]-1)*100
-                br5 = (joined["benchmark"].iloc[-1]/joined["benchmark"].iloc[-6]-1)*100
-                sr20 = (joined["stock"].iloc[-1]/joined["stock"].iloc[-21]-1)*100
-                br20 = (joined["benchmark"].iloc[-1]/joined["benchmark"].iloc[-21]-1)*100
-                rs5, rs20 = float(sr5-br5), float(sr20-br20)
-        if rs5 is not None:
-            if rs5 > 1.0 or (rs5 > -0.5 and rs5 > rs20):
-                score += 10.0
-                result["RelativeStrength"] = f"بهبود (5D نسبت به SPY: {rs5:+.1f}٪)"
-            else:
-                result["RelativeStrength"] = f"ضعیف (5D نسبت به SPY: {rs5:+.1f}٪)"
-                if rs5 < -4:
-                    knife += 10.0
-
-        # Earlyness: favor price near its recent low; penalize entries after a large rebound.
-        low10 = float(low.iloc[-10:].min())
-        rebound = (price/low10-1)*100 if low10 > 0 else 0.0
-        result["ReboundFromLowPct"] = round(rebound, 2)
-        if rebound <= 3:
-            score += 10.0
-        elif rebound <= 6:
-            score += 7.0
-        elif rebound <= 10:
-            score += 3.0
-        else:
-            score -= min(18.0, (rebound-10)*1.5)
-
-        # Strong recent lower lows plus accelerating downside are a warning, not a buy veto.
-        ret5 = (price/float(close.iloc[-6])-1)*100 if float(close.iloc[-6]) > 0 else 0.0
-        ret_prev5 = (float(close.iloc[-6])/float(close.iloc[-11])-1)*100 if float(close.iloc[-11]) > 0 else 0.0
-        if recent_low < prior_low*0.97:
-            knife += 18.0
-        if ret5 < -5 and ret5 < ret_prev5:
-            knife += 15.0
-        if not stabilizing and not pressure_fading:
-            knife += 12.0
-
-        result["EarlyRecoveryScore"] = int(round(max(0, min(100, score))))
-        result["FallingKnifeRisk"] = int(round(max(0, min(100, knife))))
-        if result["FallingKnifeRisk"] >= 45:
-            result["RecoveryStage"] = "ریسک سقوط؛ نیازمند تثبیت"
-        elif result["EarlyRecoveryScore"] >= 55 and (higher_low or daily_break or hourly_break):
-            result["RecoveryStage"] = "بازیابی زودهنگام با شواهد ساختاری"
-        elif stabilizing and (pressure_fading or higher_low):
-            result["RecoveryStage"] = "کف احتمالی در حال شکل‌گیری"
-        else:
-            result["RecoveryStage"] = "فقط زیرنظر؛ تأیید ناکافی"
-        return result
-    except (KeyError, TypeError, ValueError, IndexError, ZeroDivisionError, OverflowError):
-        return result
-
-@st.cache_data(ttl=900, show_spinner=False)
-def run_fast_market_scan():
-    rows, diagnostic_rows = [], []
-    daily_map = download_batch(list(dict.fromkeys(list(TICKERS) + ["SPY"])), "1y", "1d")
-    hourly_map = download_batch(TICKERS, "60d", "1h")
-    for ticker in TICKERS:
-        frame = daily_map.get(ticker, pd.DataFrame())
-        hourly = hourly_map.get(ticker, pd.DataFrame())
-        if frame.empty or len(frame) < 52:
-            diagnostic_rows.append({"Ticker":ticker,"Status":"FAILED","Source":"Yahoo batch download",
-                                    "Details":f"Daily data unavailable/insufficient ({len(frame)} rows)"})
             continue
-        try:
-            close, high, low = frame["Close"].astype(float), frame["High"].astype(float), frame["Low"].astype(float)
-            volume = frame["Volume"].fillna(0).astype(float)
-            price, previous = float(close.iloc[-1]), float(close.iloc[-2])
-            if not np.isfinite(price) or price <= 0:
-                raise ValueError("Invalid latest close")
-            change = (price-previous)/previous*100 if previous > 0 else 0.0
-            max52 = float(high.max()); drop52 = (max52-price)/max52*100 if max52 > 0 else 0.0
-            max20 = float(high.iloc[-20:].max()); drop20 = (max20-price)/max20*100 if max20 > 0 else 0.0
-            prior_vol = volume.iloc[-21:-1] if len(volume) >= 21 else volume.iloc[:-1]
-            avg_vol = float(prior_vol.mean()) if len(prior_vol) else 0.0
-            vol_ratio = float(volume.iloc[-1])/avg_vol if avg_vol > 0 else 0.0
-            delta = close.diff(); gains = delta.clip(lower=0).rolling(14).mean()
-            losses = (-delta.clip(upper=0)).rolling(14).mean(); rs = gains / losses.replace(0, np.nan)
-            rsi_line = 100 - (100/(1+rs)); rsi = float(rsi_line.iloc[-1]) if pd.notna(rsi_line.iloc[-1]) else 50.0
-            sma50 = float(close.rolling(50).mean().iloc[-1])
-            sma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else sma50
-            sma50_diff = (price-sma50)/sma50*100 if sma50 > 0 else 0.0
-            sma200_diff = (price-sma200)/sma200*100 if sma200 > 0 else 0.0
-            support = float(low.iloc[-60:].min()) if len(low) >= 60 else float(low.min())
-            tr = pd.concat([high-low,(high-close.shift()).abs(),(low-close.shift()).abs()],axis=1).max(axis=1)
-            atr = float(tr.rolling(14).mean().iloc[-1])
-            if not np.isfinite(atr) or atr <= 0: atr = price*0.02
-            h4 = resample_4h(hourly)
-            qd_info = q_cloud_analysis(frame)
-            q4_info = q_cloud_analysis(h4)
-            q1_info = q_cloud_analysis(hourly)
-            recovery = early_recovery_metrics(frame, hourly, daily_map.get("SPY", pd.DataFrame()))
-            qd, qdv = qd_info["status"], qd_info["value"]
-            q4, q4v = q4_info["status"], q4_info["value"]
-            q1, q1v = q1_info["status"], q1_info["value"]
-            meta = UNIVERSE_META.get(ticker, {})
-            rows.append({"Ticker":ticker,"Company":meta.get("Company",ticker),"Industry":meta.get("Industry", "") or "N/A",
-                "MarketCap":meta.get("MarketCap",np.nan),
-                "Price":round(price,2),"Change":round(change,2),"Drop52W":round(drop52,2),"RSI":round(rsi,2),
-                "NearSupport":"Valid" if price <= support*1.10 else "Normal",
-                "Q_Daily":qd,"Q_Daily_Value":qdv,"Q_4H":q4,"Q_4H_Value":q4v,"Q_1H":q1,"Q_1H_Value":q1v,
-                "Q_Daily_Event":qd_info["event"],"Q_4H_Event":q4_info["event"],"Q_1H_Event":q1_info["event"],
-                "Q_Daily_Cloud":f"{qd_info['cloud_color']} {qd_info['cloud_move']}",
-                "Q_4H_Cloud":f"{q4_info['cloud_color']} {q4_info['cloud_move']}",
-                "Q_1H_Cloud":f"{q1_info['cloud_color']} {q1_info['cloud_move']}",
-                "VolRatio":round(vol_ratio,2),"SMA50_Diff":round(sma50_diff,2),"SMA200_Diff":round(sma200_diff,2),
-                "StopLoss":round(price-1.5*atr,2),"Volume":int(volume.iloc[-1]) if np.isfinite(volume.iloc[-1]) else 0,
-                **recovery,
-                "Score":round(float(recovery["EarlyRecoveryScore"])-0.30*float(recovery["FallingKnifeRisk"]),2)})
-            diagnostic_rows.append({"Ticker":ticker,"Status":"OK" if not hourly.empty else "PARTIAL",
-                "Source":"Yahoo Finance batch download",
-                "Details":f"{len(frame)} daily bars; {len(hourly)} hourly bars; {len(h4)} derived 4H bars"})
-        except Exception as exc:
-            diagnostic_rows.append({"Ticker":ticker,"Status":"FAILED","Source":"Yahoo batch download",
-                                    "Details":f"Calculation error: {type(exc).__name__}: {exc}"})
-    return rows, diagnostic_rows
 
-btn_col, _ = st.columns([1,4])
-with btn_col:
-    if st.button("🔄 Refresh Data", type="primary"):
-        st.cache_data.clear()
-        st.rerun()
+    return result
 
-with st.spinner("در حال دریافت داده از Yahoo Finance..."):
-    scan_data, diagnostics = run_fast_market_scan()
 
-df_res = pd.DataFrame(scan_data)
-if len(df_res):
-    st.success(f"دریافت داده موفق برای {len(df_res)} از {len(TICKERS)} نماد. منبع Universe: {UNIVERSE_SOURCE}")
-else:
-    st.error("هیچ نمادی داده دریافت نکرد. بخش تشخیص اتصال را باز کن تا خطای واقعی مشخص شود.")
-with st.expander("🔎 Yahoo connection diagnostics", expanded=df_res.empty):
-    st.caption(f"زمان اسکن: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    st.dataframe(pd.DataFrame(diagnostics), use_container_width=True, hide_index=True)
+# ------------------ اندیکاتورها ------------------
+def add_indicators(df):
+    x = df.copy()
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def lookup_industry(ticker):
-    """Fetch industry label from Yahoo metadata; return N/A rather than inventing one."""
-    try:
-        info = yf.Ticker(str(ticker)).get_info()
-        industry = info.get("industry") if isinstance(info, dict) else None
-        return str(industry).strip() if industry else "N/A"
-    except Exception:
-        return "N/A"
+    x["EMA9"] = x["Close"].ewm(span=9, adjust=False).mean()
+    x["EMA21"] = x["Close"].ewm(span=21, adjust=False).mean()
 
-if not df_res.empty:
-    # Discovery ranking favors early recovery evidence and subtracts falling-knife risk.
-    df_res = df_res.sort_values(["Score", "EarlyRecoveryScore"], ascending=[False, False]).head(10)
-    if "Industry" not in df_res.columns:
-        df_res["Industry"] = "N/A"
-    for _idx, _row in df_res.iterrows():
-        if not str(_row.get("Industry", "N/A")).strip() or str(_row.get("Industry", "N/A")).strip().upper() == "N/A":
-            df_res.at[_idx, "Industry"] = lookup_industry(_row["Ticker"])
-fallback = ["NVDA","AMD","INTC","TSLA","AAPL","MSFT"]
-top_tickers = df_res["Ticker"].tolist() if not df_res.empty else fallback.copy()
-while len(top_tickers) < 6:
-    top_tickers.append(fallback[len(top_tickers) % len(fallback)])
-top_tickers = top_tickers[:6]
+    delta = x["Close"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
-def fmt_cap(value):
-    if pd.isna(value): return "N/A"
-    value = float(value)
-    if value >= 1e12: return f"${value/1e12:.2f}T"
-    if value >= 1e9: return f"${value/1e9:.2f}B"
-    if value >= 1e6: return f"${value/1e6:.2f}M"
-    return f"${value:,.0f}"
+    avg_gain = gain.ewm(
+        alpha=1 / 14, min_periods=14, adjust=False
+    ).mean()
 
-def fmt_volume(value):
-    value = float(value)
-    if value >= 1e9: return f"{value/1e9:.2f}B"
-    if value >= 1e6: return f"{value/1e6:.2f}M"
-    if value >= 1e3: return f"{value/1e3:.1f}K"
-    return f"{value:,.0f}"
+    avg_loss = loss.ewm(
+        alpha=1 / 14, min_periods=14, adjust=False
+    ).mean()
 
-st.caption(f"Universe: {len(TICKERS)} نماد | منبع: {UNIVERSE_SOURCE}")
-st.caption("رتبه‌بندی فرصت کف: افت قبلی + تضعیف فشار فروش/جذب عرضه + تثبیت و Higher Low + شکست ساختار نزولی + قدرت نسبی بهتر؛ امتیاز Falling-Knife Risk از رتبه کم می‌کند. این امتیاز فقط برای کشف و رتبه‌بندی است و سیگنال BUY نیست.")
-st.caption("Q-Line مطابق Pine Script شما محاسبه می‌شود: Base Line دورهٔ ۲۶ با offset=+26 و ابر با offset=+25. تمرکز هشدار روی Q-Line خارج از ابر و به‌ویژه زیر ابر است؛ داخل ابر هشدار مهمی ندارد. بالای ابر فقط وضعیت جداگانه است و به‌تنهایی سیگنال منفی نیست. بازگشت به ابر هشدار خروج را پاک می‌کند. 4H از کندل‌های 1H تجمیع می‌شود.")
-st.subheader("📊 Top Alpha Stocks — Early Recovery Ranking")
-rows_html = ""
-if not df_res.empty:
-    for rank, row in enumerate(df_res.reset_index(drop=True).to_dict("records"), start=1):
-        chg = row["Change"]
-        chg_color = "#f87171" if chg < 0 else "#4ade80"
-        s50, s200 = row["SMA50_Diff"], row["SMA200_Diff"]
-        cells = [
-            f"<td style='color:#94a3b8'>{rank}</td>",
-            f"<td><b style='color:#38bdf8'>{row['Ticker']}</b></td>",
-            f"<td style='text-align:left;color:#f1f5f9'>{row['Company']}</td>",
-            f"<td style='text-align:left;color:#c4b5fd'>{row.get('Industry', 'N/A')}</td>",
-            f"<td style='color:#38bdf8'>{fmt_cap(row['MarketCap'])}</td>",
-            f"<td style='color:#fff'>${row['Price']:.2f}</td>",
-            f"<td style='color:{chg_color}'>{chg:+.2f}%</td>",
-            f"<td style='color:#fbbf24'>-{row['Drop52W']:.2f}%</td>",
-            f"<td style='color:#38bdf8'>{row['RSI']:.2f}</td>",
-            f"<td style='color:#22c55e'>{row.get('EarlyRecoveryScore', 0)}</td>",
-            f"<td style='color:{'#ef4444' if row.get('FallingKnifeRisk', 50) >= 45 else '#fbbf24'}'>{row.get('FallingKnifeRisk', 50)}</td>",
-            f"<td>{row.get('RecoveryStage', 'N/A')}</td>",
-            f"<td style='color:#4ade80'>{row['NearSupport']}</td>",
-            f"<td style='color:#cbd5e1'>{fmt_volume(row['Volume'])}</td>",
-            f"<td style='color:{'#38bdf8' if row['VolRatio'] >= 1.2 else '#cbd5e1'}'>{row['VolRatio']:.2f}x</td>",
-            f"<td style='color:{'#f87171' if s50 < 0 else '#4ade80'}'>{s50:+.2f}%</td>",
-            f"<td style='color:{'#f87171' if s200 < 0 else '#4ade80'}'>{s200:+.2f}%</td>",
-            f"<td style='color:#f87171'>${row['StopLoss']:.2f}</td>",
-        ]
-        rows_html += "<tr>" + "".join(cells) + "</tr>"
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    x["RSI"] = 100 - 100 / (1 + rs)
 
-table_html = """
-<!DOCTYPE html><html><head><style>
-body{margin:0;padding:0;background:#131722;font-family:Arial,sans-serif}
-table{width:100%;border-collapse:collapse;background:#131722;color:#d1d4dc;table-layout:fixed}
-th{background:#1e222d;color:#f8fafc;font-size:12px;font-weight:bold;padding:8px 2px;text-align:center;border-bottom:2px solid #2a2e39;white-space:nowrap}
-td{padding:8px 2px;text-align:center;border-bottom:1px solid #2a2e39;font-size:14px;font-weight:bold;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-tr:hover{background:#1e222d}
-</style></head><body><table><thead><tr>
-<th style='width:2.5%'>No</th><th style='width:5.5%'>Ticker</th><th style='width:10%;text-align:left'>Company</th><th style='width:11%;text-align:left'>Industry</th>
-<th style='width:6.5%'>Cap</th><th style='width:5.5%'>Price</th><th style='width:5.5%'>Chg %</th>
-<th style='width:6.5%'>52W Drop</th><th style='width:4.5%'>RSI</th><th style='width:6%'>Early Score</th><th style='width:6%'>Knife Risk</th><th style='width:6%'>Recovery Stage</th><th style='width:6%'>Support</th>
-<th style='width:6%'>Volume</th><th style='width:5%'>RVol</th><th style='width:6%'>SMA50</th>
-<th style='width:6%'>SMA200</th><th style='width:6.5%'>StopLoss</th>
-</tr></thead><tbody>
-""" + rows_html + "</tbody></table></body></html>"
-components.html(table_html, height=520, scrolling=True)
+    # MACD استاندارد: خط MACD، خط سیگنال و هیستوگرام جداگانه نگهداری می‌شوند.
+    macd_line = (
+        x["Close"].ewm(span=12, adjust=False).mean()
+        - x["Close"].ewm(span=26, adjust=False).mean()
+    )
+    macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+    x["MACDLine"] = macd_line
+    x["MACDSignal"] = macd_signal
+    x["MACDHist"] = macd_line - macd_signal
 
-with st.expander("🚨 Q-Line / Cloud Alerts — جزئیات هشدار", expanded=True):
-    if not df_res.empty:
-        alert_cols = ["Ticker", "Price", "Q_Daily", "Q_Daily_Value", "Q_Daily_Cloud", "Q_Daily_Event",
-                      "Q_4H", "Q_4H_Value", "Q_4H_Cloud", "Q_4H_Event",
-                      "Q_1H", "Q_1H_Value", "Q_1H_Cloud", "Q_1H_Event"]
-        alert_view = df_res[[c for c in alert_cols if c in df_res.columns]].copy()
-        st.dataframe(alert_view, use_container_width=True, hide_index=True)
+    typical = (x["High"] + x["Low"] + x["Close"]) / 3
+    volume = x["Volume"].fillna(0)
+    session = pd.Series(x.index.date, index=x.index)
+
+    pv = (typical * volume).groupby(session).cumsum()
+    cv = volume.groupby(session).cumsum()
+    x["VWAP"] = pv / cv.replace(0, np.nan)
+
+    x["RVOL"] = (
+        volume
+        / volume.shift(1).rolling(20).mean().replace(0, np.nan)
+    )
+
+    previous_close = x["Close"].shift(1)
+
+    true_range = pd.concat([
+        x["High"] - x["Low"],
+        (x["High"] - previous_close).abs(),
+        (x["Low"] - previous_close).abs()
+    ], axis=1).max(axis=1)
+
+    x["ATR"] = true_range.ewm(
+        alpha=1 / 14, min_periods=14, adjust=False
+    ).mean()
+
+    x["Tenkan"] = (
+        x["High"].rolling(9).max()
+        + x["Low"].rolling(9).min()
+    ) / 2
+
+    x["Kijun"] = (
+        x["High"].rolling(26).max()
+        + x["Low"].rolling(26).min()
+    ) / 2
+
+    x["SpanA"] = (x["Tenkan"] + x["Kijun"]) / 2
+
+    x["SpanB"] = (
+        x["High"].rolling(52).max()
+        + x["Low"].rolling(52).min()
+    ) / 2
+
+    return x
+
+
+def analyze(raw):
+    if raw is None or len(raw) < 60:
+        return None
+
+    # کندل آخر کنار گذاشته می‌شود چون ممکن است هنوز باز باشد.
+    x = add_indicators(raw.iloc[:-1].copy())
+    x = x.dropna(subset=["EMA9", "EMA21", "RSI", "MACDHist", "ATR"])
+
+    if len(x) < 30:
+        return None
+
+    last = x.iloc[-1]
+    previous = x.iloc[-2]
+    price = float(last["Close"])
+
+    # درصد تغییر روزانه: آخرین کندل بسته‌شده در برابر قیمت بسته‌شدن جلسه قبل.
+    # این مقدار با تغییر آخرین کندل ۵ دقیقه‌ای فرق دارد.
+    current_session_date = x.index[-1].date()
+    prior_session_rows = x[[stamp.date() < current_session_date for stamp in x.index]]
+    if not prior_session_rows.empty and float(prior_session_rows["Close"].iloc[-1]) != 0:
+        previous_session_close = float(prior_session_rows["Close"].iloc[-1])
+        daily_change = (price / previous_session_close - 1) * 100
     else:
-        st.info("برای هشدار Q-Line دادهٔ معتبر در دسترس نیست.")
+        daily_change = np.nan
+    change_5m = (
+        (price / float(previous["Close"]) - 1) * 100
+        if float(previous["Close"]) != 0 else np.nan
+    )
 
+    bars15 = raw.iloc[:-1].resample("15min").agg({
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum"
+    }).dropna()
+    # فقط کندل‌های کامل ۱۵ دقیقه‌ای را برای تأیید روند استفاده کن.
+    if len(x.index):
+        last_closed_time = x.index[-1] + pd.Timedelta(minutes=5)
+        bars15 = bars15[bars15.index + pd.Timedelta(minutes=15) <= last_closed_time]
+
+    trend15 = None
+
+    if len(bars15) >= 25:
+        ema9_15 = bars15["Close"].ewm(span=9, adjust=False).mean()
+        ema21_15 = bars15["Close"].ewm(span=21, adjust=False).mean()
+        trend15 = bool(ema9_15.iloc[-1] > ema21_15.iloc[-1])
+
+    vwap = float(last["VWAP"]) if pd.notna(last["VWAP"]) else np.nan
+
+    cloud = None
+    if pd.notna(last["SpanA"]) and pd.notna(last["SpanB"]):
+        cloud = price > max(float(last["SpanA"]), float(last["SpanB"]))
+
+    return {
+        "price": price,
+        "change": daily_change,
+        "change_5m": change_5m,
+        "rsi": float(last["RSI"]),
+        "ema9": float(last["EMA9"]),
+        "ema21": float(last["EMA21"]),
+        "macd": float(last["MACDHist"]),
+        "macd_prev": float(previous["MACDHist"]) if pd.notna(previous["MACDHist"]) else np.nan,
+        "macd_line": float(last["MACDLine"]),
+        "macd_signal": float(last["MACDSignal"]),
+        "macd_line_prev": float(previous["MACDLine"]) if pd.notna(previous["MACDLine"]) else np.nan,
+        "macd_signal_prev": float(previous["MACDSignal"]) if pd.notna(previous["MACDSignal"]) else np.nan,
+        "previous_high": float(previous["High"]),
+        "previous_low": float(previous["Low"]),
+        "vwap": vwap,
+        "rvol": float(last["RVOL"]) if pd.notna(last["RVOL"]) else np.nan,
+        "atr": float(last["ATR"]),
+        "trend15": trend15,
+        "cloud": cloud,
+        "time": str(x.index[-1])
+    }
+
+
+# ------------------ پهنای گروه ------------------
+def get_breadth(analysis):
+    valid = [
+        analysis.get(s) for s in SEMIS
+        if analysis.get(s) is not None
+    ]
+
+    if not valid:
+        return None
+
+    bullish = sum(
+        a["ema9"] > a["ema21"]
+        and pd.notna(a["vwap"])
+        and a["price"] > a["vwap"]
+        for a in valid
+    )
+
+    return bullish / len(valid), bullish, len(valid)
+
+
+# ------------------ ارزیابی SOXL و SOXS ------------------
+def evaluate(symbol, a, soxx, qqq, spy, breadth):
+    if a is None:
+        return {
+            "symbol": symbol,
+            "score": 0,
+            "decision": "داده ناکافی",
+            "reasons": [],
+            "warnings": ["داده کافی دریافت نشد."],
+            "stop": np.nan,
+            "target": np.nan,
+            "data": None
+        }
+
+    score = 0
+    reasons = []
+    warnings = []
+
+    is_long = symbol == "SOXL"
+    ema_up = a["ema9"] > a["ema21"]
+    ema_down = a["ema9"] < a["ema21"]
+    vwap_valid = pd.notna(a["vwap"])
+    vwap_aligned = vwap_valid and (a["price"] > a["vwap"] if is_long else a["price"] < a["vwap"])
+    # MACD استاندارد: خط/سیگنال و تغییر هیستوگرام جداگانه؛ برای SOXS جهت نزولی لازم است.
+    macd_up = a.get("macd_line", -np.inf) > a.get("macd_signal", np.inf)
+    macd_down = a.get("macd_line", np.inf) < a.get("macd_signal", -np.inf)
+    macd_aligned = macd_up if is_long else macd_down
+    macd_improving = pd.notna(a.get("macd_prev", np.nan)) and (
+        a["macd"] > a["macd_prev"] if is_long else a["macd"] < a["macd_prev"]
+    )
+    macd_cross = (
+        pd.notna(a.get("macd_line_prev", np.nan))
+        and pd.notna(a.get("macd_signal_prev", np.nan))
+        and ((a["macd_line_prev"] <= a["macd_signal_prev"] and a["macd_line"] > a["macd_signal"])
+             if is_long else
+             (a["macd_line_prev"] >= a["macd_signal_prev"] and a["macd_line"] < a["macd_signal"]))
+    )
+    breakout = (a["price"] > a.get("previous_high", np.inf)) if is_long else (a["price"] < a.get("previous_low", -np.inf))
+    trend15_aligned = a["trend15"] is (True if is_long else False)
+    rsi = a["rsi"]
+
+    if (ema_up if is_long else ema_down):
+        score += 15
+        reasons.append("EMA9 بالاتر از EMA21 است." if is_long else "EMA9 پایین‌تر از EMA21 است؛ جهت نزولی تأیید می‌شود.")
+    else:
+        warnings.append("چیدمان EMA با جهت معامله هم‌خوان نیست.")
+
+    if vwap_aligned:
+        score += 15
+        reasons.append("قیمت بالاتر از VWAP است." if is_long else "قیمت پایین‌تر از VWAP است.")
+    else:
+        warnings.append("قیمت نسبت به VWAP با جهت معامله هم‌خوان نیست.")
+
+    if macd_aligned:
+        score += 12
+        reasons.append("خط MACD بالاتر از سیگنال است." if is_long else "خط MACD پایین‌تر از سیگنال است.")
+    else:
+        warnings.append("خط MACD هنوز جهت معامله را تأیید نمی‌کند.")
+
+    if macd_improving:
+        score += 5
+        reasons.append("هیستوگرام MACD در جهت معامله تقویت شده است.")
+    else:
+        warnings.append("هیستوگرام MACD هنوز در جهت معامله تقویت نشده است.")
+
+    if macd_cross:
+        score += 3
+        reasons.append("کراس تازه MACD در جهت معامله تأیید شده است.")
+
+    if breakout:
+        score += 5
+        reasons.append("شکست سقف کندل قبلی تأیید شده است." if is_long else "شکست کف کندل قبلی به سمت پایین تأیید شده است.")
+    else:
+        warnings.append("شکست سطح کندل قبلی در جهت معامله هنوز تأیید نشده است.")
+
+    if is_long:
+        if 50 <= rsi <= 67:
+            score += 10; reasons.append("RSI در محدوده مناسب مومنتوم صعودی است.")
+        elif 45 <= rsi < 50:
+            score += 5; reasons.append("RSI نزدیک محدوده مثبت است.")
+        elif rsi > 72:
+            warnings.append("RSI بالاست؛ خطر تعقیب قیمت وجود دارد.")
+        elif rsi < 40:
+            warnings.append("RSI پایین است؛ به‌تنهایی سیگنال خرید نیست.")
+    else:
+        if 33 <= rsi <= 50:
+            score += 10; reasons.append("RSI با مومنتوم نزولی سازگار است.")
+        elif 50 < rsi <= 55:
+            score += 5; reasons.append("RSI نزدیک محدوده نزولی است.")
+        elif rsi < 28:
+            warnings.append("RSI بسیار پایین است؛ خطر جهش برگشتی SOXS وجود دارد.")
+        elif rsi > 60:
+            warnings.append("RSI بالا است و با مومنتوم نزولی هم‌خوانی ندارد.")
+
+    if pd.notna(a["rvol"]) and a["rvol"] >= 1.2:
+        score += 10
+        reasons.append("حجم نسبی از ۱٫۲ بیشتر است.")
+    elif pd.notna(a["rvol"]) and a["rvol"] < 0.7:
+        warnings.append("حجم نسبی پایین است.")
+    else:
+        warnings.append("حجم هنوز تأیید قوی نمی‌دهد.")
+
+    if trend15_aligned:
+        score += 10
+        reasons.append("روند ۱۵ دقیقه‌ای صعودی است." if is_long else "روند ۱۵ دقیقه‌ای نزولی است.")
+    elif a["trend15"] is not None:
+        warnings.append("روند ۱۵ دقیقه‌ای با جهت معامله هم‌خوان نیست.")
+
+    if a["cloud"] is (True if is_long else False):
+        score += 5
+        reasons.append("قیمت بالاتر از ابر ایچیموکو است." if is_long else "قیمت زیر ابر ایچیموکو است.")
+    elif a["cloud"] is not None:
+        warnings.append("موقعیت قیمت نسبت به ابر ایچیموکو تأیید کامل نمی‌دهد.")
+
+    if soxx is not None:
+        soxx_up = (
+            soxx["ema9"] > soxx["ema21"]
+            and pd.notna(soxx["vwap"])
+            and soxx["price"] > soxx["vwap"]
+        )
+        soxx_down = (
+            soxx["ema9"] < soxx["ema21"]
+            and pd.notna(soxx["vwap"])
+            and soxx["price"] < soxx["vwap"]
+        )
+
+        if symbol == "SOXL" and soxx_up:
+            score += 15
+            reasons.append("SOXX صعودی است و از جهت SOXL حمایت می‌کند.")
+        elif symbol == "SOXS" and soxx_down:
+            score += 15
+            reasons.append("SOXX ضعیف است و جهت صنعت به نفع SOXS است.")
+        elif symbol == "SOXL" and soxx_down:
+            warnings.append("SOXX نزولی است؛ خرید SOXL ریسک بیشتری دارد.")
+        elif symbol == "SOXS" and soxx_up:
+            warnings.append("SOXX صعودی است؛ خرید SOXS ریسک بیشتری دارد.")
+
+    if breadth is not None:
+        ratio, bullish, total = breadth
+
+        if symbol == "SOXL" and ratio >= 0.7:
+            score += 10
+            reasons.append(f"{bullish} از {total} سهم گروه صعودی‌اند.")
+        elif symbol == "SOXL" and ratio <= 0.3:
+            warnings.append("پهنای گروه ضعیف است.")
+        elif symbol == "SOXS" and ratio <= 0.3:
+            score += 10
+            reasons.append("ضعف سهام گروه گسترده است.")
+        elif symbol == "SOXS" and ratio >= 0.7:
+            warnings.append("اکثر سهام گروه صعودی‌اند؛ SOXS پرریسک‌تر است.")
+
+    market = [m for m in (qqq, spy) if m is not None]
+
+    if market:
+        up_count = sum(m["ema9"] > m["ema21"] for m in market)
+
+        if symbol == "SOXL" and up_count == len(market):
+            score += 5
+            reasons.append("روند کوتاه‌مدت QQQ و SPY صعودی است.")
+        elif symbol == "SOXS" and up_count == 0:
+            score += 5
+            reasons.append("روند کوتاه‌مدت QQQ و SPY نزولی است.")
+        elif symbol == "SOXL" and up_count == 0:
+            warnings.append("QQQ و SPY ضعیف‌اند.")
+        elif symbol == "SOXS" and up_count == len(market):
+            warnings.append("QQQ و SPY صعودی‌اند.")
+
+    score = min(score, 100)
+
+    # امتیاز به‌تنهایی اجازه ورود نیست: شرایط پایه باید هم‌زمان برقرار باشد.
+    rsi_ok = (50 <= rsi < 72) if is_long else (28 < rsi <= 50)
+    core_ok = (
+        (ema_up if is_long else ema_down)
+        and vwap_aligned and macd_aligned and macd_improving
+        and breakout and trend15_aligned and rsi_ok
+        and pd.notna(a["rvol"]) and a["rvol"] >= 0.8
+    )
+
+    if symbol == "SOXL":
+        core_ok = core_ok and soxx is not None
+    if symbol == "SOXL" and soxx is not None:
+        core_ok = core_ok and (
+            soxx["ema9"] > soxx["ema21"]
+            and pd.notna(soxx["vwap"])
+            and soxx["price"] > soxx["vwap"]
+        )
+        if breadth is not None:
+            core_ok = core_ok and breadth[0] >= 0.5
+
+    if symbol == "SOXS":
+        core_ok = core_ok and soxx is not None
+    if symbol == "SOXS" and soxx is not None:
+        core_ok = core_ok and (
+            soxx["ema9"] < soxx["ema21"]
+            and pd.notna(soxx["vwap"])
+            and soxx["price"] < soxx["vwap"]
+        )
+        if breadth is not None:
+            core_ok = core_ok and breadth[0] <= 0.5
+
+    if score >= 75 and core_ok:
+        decision = "خرید مشروط"
+    elif score >= 45:
+        decision = "انتظار برای تأیید"
+    else:
+        decision = "عدم معامله"
+
+    if decision != "خرید مشروط":
+        warnings.append("شرایط ورود کامل نیست؛ معامله را اجباری نکن.")
+
+    return {
+        "symbol": symbol,
+        "score": score,
+        "decision": decision,
+        "reasons": reasons,
+        "warnings": warnings,
+        "stop": (
+            a["price"] - 1.25 * a["atr"] if is_long and a["atr"] > 0
+            else a["price"] + 1.25 * a["atr"] if (not is_long and a["atr"] > 0)
+            else np.nan
+        ),
+        "target": (
+            a["price"] + 1.875 * a["atr"] if is_long and a["atr"] > 0
+            else a["price"] - 1.875 * a["atr"] if (not is_long and a["atr"] > 0)
+            else np.nan
+        ),
+        "data": a
+    }
+
+
+# ------------------ تحلیل داده‌های دریافتی ------------------
+with st.spinner("در حال دریافت داده‌های بازار..."):
+    raw_data = download_data()
+
+analysis = {}
+
+for symbol, frame in raw_data.items():
+    try:
+        analysis[symbol] = analyze(frame)
+    except Exception:
+        analysis[symbol] = None
+
+if not raw_data:
+    st.error(
+        "داده بازار از Yahoo Finance دریافت نشد؛ بنابراین سیگنال زنده نمایش داده نمی‌شود. "
+        "اینترنت، دسترسی Yahoo Finance و نصب/به‌روز بودن yfinance را بررسی کن. "
+        "بخش نمودارهای TradingView و جدول نمادها همچنان نمایش داده می‌شود."
+    )
+    st.info("اگر این پیام تکرار شد، در ترمینال اجرای Streamlit خطای yfinance را بررسی کن؛ داده ساختگی جایگزین نمی‌شود.")
+
+breadth = get_breadth(analysis)
+soxx = analysis.get("SOXX")
+qqq = analysis.get("QQQ")
+spy = analysis.get("SPY")
+
+# ------------------ خلاصه شاخص‌ها ------------------
+st.subheader("🌐 وضعیت کلی بازار")
+if not raw_data:
+    st.caption("حالت نمایش در دسترس است، اما داده تحلیلی Yahoo Finance فعلاً بارگیری نشده است.")
+c1, c2, c3, c4 = st.columns(4)
+
+for col, symbol, label in [
+    (c1, "SOXX", "SOXX — صنعت تراشه"),
+    (c2, "QQQ", "QQQ — فناوری"),
+    (c3, "SPY", "SPY — بازار عمومی")
+]:
+    a = analysis.get(symbol)
+
+    if a is None:
+        col.metric(label, "داده موجود نیست")
+    else:
+        col.metric(label, f"${a['price']:.2f}", f"{a['change']:+.2f}%")
+        col.caption(
+            f"RSI: {a['rsi']:.2f} | "
+            f"روند ۱۵ دقیقه: "
+            f"{'صعودی' if a['trend15'] is True else 'نزولی' if a['trend15'] is False else 'نامشخص'}"
+        )
+
+if breadth is not None:
+    c4.metric(
+        "پهنای گروه نیمه‌هادی",
+        f"{breadth[1]}/{breadth[2]}",
+        f"{breadth[0] * 100:.0f}%"
+    )
+else:
+    c4.metric("پهنای گروه نیمه‌هادی", "نامشخص")
+
+# ------------------ تصمیم فشرده + نمودارهای اصلی ------------------
 st.markdown("---")
-st.subheader("🖥️ 6-Chart Live TradingView Grid (Auto-Synced with Top Table)")
-timeframe = st.radio("Global Timeframe:", ["5","60","240","D"], index=3, horizontal=True,
-                     format_func=lambda x: {"5":"5m","60":"1H","240":"4H","D":"1D"}[x])
+st.subheader("⚖️ تصمیم ورود و نمودارهای اصلی")
 
-def render_chart(symbol, interval, height=750):
-    symbol = "".join(ch for ch in str(symbol).upper().strip() if ch.isalnum() or ch in ".-_")
-    if not symbol:
-        st.warning("لطفاً نماد معتبر وارد کن.")
-        return
-    widget = f"""
-    <html style="margin:0;padding:0;height:100%"><body style="margin:0;padding:0;height:100%;background:#131722">
-    <div class="tradingview-widget-container" style="height:100%;width:100%">
-      <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js" async>
-      {{
-        "autosize":true,"symbol":"{symbol}","interval":"{interval}",
-        "timezone":"Etc/UTC","theme":"dark","style":"1","locale":"en",
-        "allow_symbol_change":true,
-        "studies":["IchimokuCloud@tv-basicstudies","RSI@tv-basicstudies","MACD@tv-basicstudies","Moving Average Weighted@tv-basicstudies"],
-        "support_host":"https://www.tradingview.com"
-      }}
-      </script>
-    </div></body></html>
+results = [
+    evaluate("SOXL", analysis.get("SOXL"), soxx, qqq, spy, breadth),
+    evaluate("SOXS", analysis.get("SOXS"), soxx, qqq, spy, breadth)
+]
+
+# نمودار اصلی را کنار تصمیم‌ها نگه می‌داریم تا برای دیدن آن‌ها نیاز به اسکرول زیاد نباشد.
+def render_tv(symbol, height=340):
+    widget_id = "tv_" + symbol.replace(":", "_")
+    html = f"""
+    <div id="{widget_id}"></div>
+    <script src="https://s3.tradingview.com/tv.js"></script>
+    <script>
+    new TradingView.widget({{
+      "width":"100%",
+      "height":{height},
+      "symbol":"{symbol}",
+      "interval":"5",
+      "timezone":"America/New_York",
+      "theme":"{THEME['tv']}",
+      "style":"1",
+      "locale":"en",
+      "enable_publishing":false,
+      "allow_symbol_change":true,
+      "container_id":"{widget_id}",
+      "studies":["RSI@tv-basicstudies", "MACD@tv-basicstudies", "IchimokuCloud@tv-basicstudies"]
+    }});
+    </script>
     """
-    components.html(widget, height=height)
+    components.html(html, height=height + 20, scrolling=False)
 
-for row_idx in range(2):
-    chart_cols = st.columns(3)
-    for col_idx, col in enumerate(chart_cols):
-        idx = row_idx*3 + col_idx
-        with col:
-            symbol = st.text_input(f"Chart {idx+1} (Rank {idx+1})",
-                                   value=top_tickers[idx], key=f"chart_symbol_{idx+1}")
-            render_chart(symbol, timeframe, height=750)
+
+def fmt_price(value):
+    return f"${value:.2f}" if pd.notna(value) and np.isfinite(value) else "—"
+
+for col, result in zip(st.columns(2), results):
+    with col:
+        color = (
+            "#00c853" if result["decision"] == "خرید مشروط"
+            else "#ffb300" if result["decision"] == "انتظار برای تأیید"
+            else "#ff5252"
+        )
+        a = result["data"]
+        st.markdown(
+            f"""<div style="padding:10px 12px;border-radius:9px;border:2px solid {color};
+            background:{THEME['panel']};color:{THEME['text']};margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <h3 style="margin:0;color:{color}">{result['symbol']} — {result['decision']}</h3>
+              <b>امتیاز {result['score']}/100</b>
+            </div></div>""",
+            unsafe_allow_html=True
+        )
+        if a:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("قیمت آخرین کندل بسته", fmt_price(a["price"]), f"{a['change']:+.2f}% روزانه")
+            m2.metric("حد ضرر تخمینی", fmt_price(result["stop"]))
+            m3.metric("هدف تخمینی", fmt_price(result["target"]))
+            # پیشنهاد مدیریت موقعیت فقط وقتی قیمت ورود واقعی وارد شده باشد.
+            _pos = position_inputs.get(result["symbol"], {})
+            if _pos.get("held") and _pos.get("entry", 0) > 0 and _pos.get("shares", 0) > 0:
+                _entry = _pos["entry"]
+                _shares = _pos["shares"]
+                _pnl_pct = (a["price"] / _entry - 1) * 100
+                _pnl_dollars = (a["price"] - _entry) * _shares
+                _is_long_position = result["symbol"] == "SOXL"
+                _stop_pos = _entry - 1.25 * a["atr"] if _is_long_position else _entry + 1.25 * a["atr"]
+                _target_pos = _entry + 1.875 * a["atr"] if _is_long_position else _entry - 1.875 * a["atr"]
+                _now_et = datetime.now(ZoneInfo("America/New_York")).time()
+                _weak = (a["ema9"] < a["ema21"] and pd.notna(a["vwap"]) and a["price"] < a["vwap"] and a["macd"] < 0)
+                if a["price"] <= _stop_pos:
+                    _hold_advice = "خروج طبق حد ضرر راهنما"
+                elif a["price"] >= _target_pos:
+                    _hold_advice = "رسیدن به هدف؛ برداشت سود/خروج را بررسی کن"
+                elif _weak:
+                    _hold_advice = "هشدار ضعف؛ خروج یا کاهش حجم را بررسی کن"
+                elif _now_et >= time(15, 45):
+                    _hold_advice = "پایان روز نزدیک است؛ طبق قانون بدون نگهداری شبانه خارج شو"
+                else:
+                    _hold_advice = "نگهداری مشروط؛ حد ضرر و هدف را زیر نظر بگیر"
+                st.warning(f"**وضعیت موقعیت:** {_hold_advice}\n\nورود ${_entry:.2f} | تعداد {_shares} | بازده باز { _pnl_pct:+.2f}% | سود/زیان تقریبی ${_pnl_dollars:+.2f} | حد ضرر راهنما ${_stop_pos:.2f} | هدف راهنما ${_target_pos:.2f}")
+            elif _pos.get("held"):
+                st.info("برای پیشنهاد نگهداری/خروج، قیمت ورود و تعداد سهم را وارد کن.")
+            st.caption(f"آخرین کندل بسته‌شده: {a['time']} | RSI {a['rsi']:.1f} | RVOL {a['rvol']:.2f}x" if pd.notna(a['rvol']) else f"آخرین کندل بسته‌شده: {a['time']} | RSI {a['rsi']:.1f} | RVOL نامشخص")
+        positives = result["reasons"][:3]
+        blockers = result["warnings"][:3]
+        with st.expander(f"دلایل و موانع {result['symbol']}", expanded=False):
+            st.markdown("**دلایل مثبت**")
+            st.write("\n".join("✅ " + x for x in positives) if positives else "تأیید مثبت کافی وجود ندارد.")
+            st.markdown("**موانع و ریسک‌ها**")
+            st.write("\n".join("⚠️ " + x for x in blockers) if blockers else "مانع مهمی در فیلترهای فعلی شناسایی نشد.")
+
+st.caption("MACD با خط MACD، خط سیگنال و هیستوگرام جداگانه سنجیده می‌شود؛ ورود به کندل بسته‌شده، شکست سقف قبلی، روند ۱۵ دقیقه‌ای و فیلتر SOXX وابسته است. حد ضرر/هدف برآوردی بر پایه ATR کندل‌های ۵ دقیقه‌ای هستند و سفارش حفاظتی واقعی نیستند. داده Yahoo ممکن است تأخیری باشد و سود تضمین‌شده نیست.")
+
+# چهار نمودار اصلی در یک ردیف، به ترتیب درخواستی: SOXS، SOXL، SOXX، NVDA.
+main_chart_cols = st.columns(4)
+main_charts = [
+    ("AMEX:SOXS", "SOXS"),
+    ("AMEX:SOXL", "SOXL"),
+    ("NASDAQ:SOXX", "SOXX"),
+    ("NASDAQ:NVDA", "NVDA"),
+]
+for chart_col, (tv_symbol, display_name) in zip(main_chart_cols, main_charts):
+    with chart_col:
+        st.markdown(f"**{display_name} — نمودار ۵ دقیقه**")
+        render_tv(tv_symbol, 430)
+
+# ------------------ جدول و تحلیل کنار آن ------------------
+st.markdown("---")
+st.subheader("📊 جدول بازار و تحلیل کلی")
+
+rows = []
+
+for symbol in SYMBOLS:
+    a = analysis.get(symbol)
+
+    if a is None:
+        rows.append({
+            "نماد": symbol,
+            "قیمت ($)": np.nan,
+            "تغییر روزانه (%)": np.nan,
+            "RSI": np.nan,
+            "EMA9": np.nan,
+            "EMA21": np.nan,
+            "VWAP": np.nan,
+            "RVOL": np.nan,
+            "روند ۱۵ دقیقه": "نامشخص"
+        })
+    else:
+        rows.append({
+            "نماد": symbol,
+            "قیمت ($)": a["price"],
+            "تغییر روزانه (%)": a["change"],
+            "RSI": a["rsi"],
+            "EMA9": a["ema9"],
+            "EMA21": a["ema21"],
+            "VWAP": a["vwap"],
+            "RVOL": a["rvol"],
+            "روند ۱۵ دقیقه": (
+                "صعودی" if a["trend15"] is True
+                else "نزولی" if a["trend15"] is False
+                else "نامشخص"
+            )
+        })
+
+table = pd.DataFrame(rows)
+
+
+def color_change(value):
+    if pd.isna(value):
+        return ""
+    if value > 0:
+        return "color:#00d26a;font-weight:bold"
+    if value < 0:
+        return "color:#ff5252;font-weight:bold"
+    return f"color:{THEME['text']}"
+
+
+styled = (
+    table.style
+    .format({
+        "قیمت ($)": "${:.2f}",
+        "تغییر روزانه (%)": "{:+.2f}%",
+        "RSI": "{:.2f}",
+        "EMA9": "${:.2f}",
+        "EMA21": "${:.2f}",
+        "VWAP": "${:.2f}",
+        "RVOL": "{:.2f}x"
+    }, na_rep="—")
+    .map(color_change, subset=["تغییر روزانه (%)"])
+    .set_properties(**{
+        "font-size": "14px",
+        "padding": "5px 6px",
+        "white-space": "nowrap"
+    })
+    .set_table_styles([
+        {"selector": "table", "props": [
+            ("color", THEME["text"]),
+            ("background-color", THEME["panel"]),
+        ]},
+        {"selector": "td", "props": [
+            ("color", THEME["text"]),
+            ("background-color", THEME["panel"]),
+        ]},
+        {"selector": "th", "props": [
+            ("color", THEME["text"]),
+            ("background-color", THEME["panel2"]),
+            ("font-size", "13px"),
+            ("font-weight", "bold"),
+            ("white-space", "normal"),
+            ("padding", "5px")
+        ]}
+    ])
+)
+
+left, right = st.columns([1.65, 1])
+
+with left:
+    st.dataframe(
+        styled,
+        use_container_width=True,
+        hide_index=True,
+        height=540
+    )
+
+with right:
+    st.markdown("### 🧭 تحلیل کلی بازار")
+
+    summary = []
+
+    if soxx is not None:
+        summary.append(
+            f"**SOXX:** تغییر روزانه {soxx['change']:+.2f}%؛ "
+            f"RSI برابر {soxx['rsi']:.2f}."
+        )
+
+    if qqq is not None:
+        summary.append(
+            f"**QQQ:** تغییر روزانه {qqq['change']:+.2f}%؛ "
+            f"RSI برابر {qqq['rsi']:.2f}."
+        )
+
+    if spy is not None:
+        summary.append(
+            f"**SPY:** تغییر روزانه {spy['change']:+.2f}%؛ "
+            f"RSI برابر {spy['rsi']:.2f}."
+        )
+
+    if breadth is not None:
+        ratio, bullish, total = breadth
+
+        if ratio >= 0.7:
+            group_status = "قدرت گروه نسبتاً خوب است."
+        elif ratio <= 0.3:
+            group_status = "ضعف گروه گسترده است؛ احتیاط لازم است."
+        else:
+            group_status = "وضعیت گروه ترکیبی است."
+
+        summary.append(
+            f"**گروه نیمه‌هادی:** {bullish} از {total} سهم صعودی‌اند. "
+            f"{group_status}"
+        )
+
+    if soxx is not None and qqq is not None and spy is not None:
+        if soxx["change"] < 0 and qqq["change"] < 0 and spy["change"] < 0:
+            conclusion = (
+                "هر سه شاخص در آخرین کندل منفی‌اند؛ برای SOXL "
+                "منتظر تثبیت و برگشت معتبر باش."
+            )
+        elif soxx["ema9"] > soxx["ema21"] and soxx["change"] > 0:
+            conclusion = (
+                "SOXX نشانه‌های کوتاه‌مدت مثبت دارد؛ "
+                "حجم، VWAP و تأیید ۱۵ دقیقه را هم بررسی کن."
+            )
+        else:
+            conclusion = (
+                "بازار هنوز یک‌دست نیست؛ از ورود عجولانه پرهیز کن "
+                "و تأیید هم‌زمان قیمت و روند را بخواه."
+            )
+
+        summary.append("**جمع‌بندی:** " + conclusion)
+
+    st.info("\n\n".join(summary) if summary else "داده کافی موجود نیست.")
+
+    st.markdown("### 📖 معنی ستون آخر")
+    st.write("**صعودی:** EMA9 بالاتر از EMA21 در تایم‌فریم ۱۵ دقیقه است.")
+    st.write("**نزولی:** EMA9 پایین‌تر از EMA21 است.")
+    st.write("این ستون سود یا احتمال سود را نشان نمی‌دهد.")
+
+    st.markdown("### ⚠️ یادآوری")
+    st.write(
+        "درصد تغییر جدول و کارت‌ها از قیمت بسته‌شدن جلسه قبل تا آخرین کندل بسته‌شده امروز محاسبه می‌شود؛ "
+        "تغییر آخرین کندل ۵ دقیقه‌ای جداگانه محاسبه می‌شود. حد ضرر و هدف پیشنهادی تضمین‌شده نیستند."
+    )
+
+# ------------------ نمودارهای تکمیلی TradingView ------------------
+with st.expander("📈 نمودارهای تکمیلی TradingView — سایر نمادها", expanded=False):
+    tv_symbols = [
+        ("NASDAQ:QQQ", "QQQ"), ("AMEX:SPY", "SPY"),
+        ("NASDAQ:AVGO", "AVGO"), ("NASDAQ:AMD", "AMD"),
+        ("NASDAQ:QCOM", "QCOM"), ("NASDAQ:AMAT", "AMAT"), ("NASDAQ:MU", "MU"),
+        ("NASDAQ:LRCX", "LRCX"), ("NASDAQ:KLAC", "KLAC"), ("NASDAQ:MRVL", "MRVL"),
+        ("NASDAQ:INTC", "INTC")
+    ]
+    for start_idx in range(0, len(tv_symbols), 3):
+        chart_cols = st.columns(3)
+        for col, (symbol, name) in zip(chart_cols, tv_symbols[start_idx:start_idx + 3]):
+            with col:
+                st.markdown(f"**{name}**")
+                render_tv(symbol, 340)
+
+st.caption(
+    "این داشبورد فقط ابزار تحلیل است و سفارش خرید یا فروش ثبت نمی‌کند. "
+    "قیمت Yahoo Finance ممکن است تأخیری باشد."
+)
